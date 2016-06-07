@@ -16,11 +16,8 @@ https://github.com/brendangregg/Misc/blob/master/java/jmaps
 ### Usage - Optional Parameters
     Param 1: Sampling frequency (defaults to 99Hz)
     Param 2: Sample time        (defaults to 30s)
- 
-### How to interpret Flame Graphs
-  http://www.slideshare.net/brendangregg/blazing-performance-with-flame-graphs/35
 
-### Learn more
+### Learn more and how to interpret Flame Graphs
    http://techblog.netflix.com/2015/07/java-in-flames.html
    
    Brendan Gregg LISA 2013 presentation:
