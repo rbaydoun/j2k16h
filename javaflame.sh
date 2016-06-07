@@ -81,6 +81,9 @@ elif [ -e $AGENT_HOME/libperfmap.so ]; then
 fi
 
 
+# Create output directory
+mkdir ./flame_output
+
 echo "Sampling perf_events at $FREQUENCY Hz for $SLEEP_TIME seconds..."
 cmd="$PERF_CMD record -F $FREQUENCY -a -g -- sleep $SLEEP_TIME"
 eval $cmd
@@ -130,8 +133,7 @@ for PID in $(pgrep -x jsvc); do
 	host=$(hostname)
 	date_time=$(date)
 	title="$host - PID $PID @ $date_time"
-	mkdir ./flame_output
-	cmd="cat output.tmp | grep $PID | $FLAME_GRAPH_HOME/flamegraph.pl --color=java --title=\"$title\" --hash > ./flame_output/flamegraph_$PID.svg"
+	cmd="cat output.tmp | grep $PID | $FLAME_GRAPH_HOME/flamegraph.pl --color=java --title=\"$title\" --hash > \"./flame_output/$title.svg\""
 	eval $cmd
 done
 
