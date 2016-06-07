@@ -1,28 +1,31 @@
-# jmaps - creates java /tmp/perf-PID.map symbol maps for all java processes.
-#
-# This is a helper script that finds all running "java" processes, then executes
-# perf-map-agent on them all, creating symbol map files in /tmp. These map files
-# are read by perf_events (aka "perf") when doing system profiles (specifically,
-# the "report" and "script" subcommands).
-#
-# My typical workflow is this:
-#
-# perf record -F 99 -a -g -- sleep 30; jmaps
-# perf script > out.stacks
-# ./stackcollapse-perf.pl out.stacks | ./flamegraph.pl --color=java --hash > out.stacks.svg
-#
-# The stackcollapse-perf.pl and flamegraph.pl programs come from:
-# https://github.com/brendangregg/FlameGraph
-#
-# REQUIREMENTS:
-# Tune two environment settings below.
-#
+# Heavily inspired by jmaps
 # 13-Feb-2015	Brendan Gregg	Created this.
+
+# Requirements:
+#   Linux perf tools --> already setup in Jim Instances.
+# 	The stackcollapse-perf.pl and flamegraph.pl programs come from:
+# 	https://github.com/brendangregg/FlameGraph
+#
+# Usage -- Param 1: Sampling frequency (defaults to 99Hz)
+#          Param 2: Sample time        )defaults to 30s)
 
 JAVA_HOME=/usr/lib/jvm/j2sdk1.8-oracle
 FLAME_GRAPH_HOME=/home/admin/git/FlameGraph-master
 AGENT_HOME=$JAVA_HOME
 PERF_CMD=/usr/bin/perf_3.2
+
+# Validate parameters and set default values if missing.
+if [ -z "$1" ]; then
+	FREQUENCY=99
+else
+	FREQUENCY=$1
+fi
+
+if [ -z "$2" ]; then
+	SLEEP_TIME=30
+else
+	SLEEP_TIME=$2
+fi
 
 # Validation...
 if [ "$USER" != root ]; then
@@ -50,26 +53,33 @@ if [ ! -x $PERF_CMD ]; then
 	exit
 fi
 
+# Validate parameters and set default values if missing.
+if [ -z "$FREQUENCY" ]; then
+	FREQUENCY=99
+fi
+
+if [ -z "$SLEEP_TIME" ]; then
+	SLEEP_TIME=30
+fi
+
 # figure out where the agent files are:
 AGENT_OUT=""
 AGENT_JAR=""
 if [ -e $AGENT_HOME/out/attach-main.jar ]; then
 	AGENT_JAR=$AGENT_HOME/out/attach-main.jar
-
 elif [ -e $AGENT_HOME/attach-main.jar ]; then
 	AGENT_JAR=$AGENT_HOME/attach-main.jar
 fi
 
 if [ -e $AGENT_HOME/out/libperfmap.so ]; then
 	AGENT_OUT=$AGENT_HOME/out
-
 elif [ -e $AGENT_HOME/libperfmap.so ]; then
 	AGENT_OUT=$AGENT_HOME
 fi
 
 
-echo "Sampling perf_events at $1Hz for $2 seconds..."
-cmd="$PERF_CMD record -F $1 -a -g -- sleep $2"
+echo "Sampling perf_events at $FREQUENCY Hz for $SLEEP_TIME seconds..."
+cmd="$PERF_CMD record -F $FREQUENCY -a -g -- sleep $SLEEP_TIME"
 eval $cmd
 
 # Backup the current directory.  Why doesn't pushd and popd work?
@@ -120,3 +130,6 @@ done
 
 # Clean up.
 rm output.tmp
+
+# Keep the perf data, it could be usefull for something else.
+#rm perf.data
