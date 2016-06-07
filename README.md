@@ -3,11 +3,9 @@ The purpose of this project was to write a script that will generate Flame Graph
 
 (See https://www.infoq.com/news/2015/08/JVM-Option-mixed-mode-profiles for details.)
 
-Heavily inspired by jmaps, by Brendan Gregg (13-Feb-2015)
 
+This script is heavily inspired by jmaps, by Brendan Gregg (13-Feb-2015).  You can get it here:
 https://github.com/brendangregg/Misc/blob/master/java/jmaps
-
-Also
 
 ### Requirements
 * Linux perf tools --> already setup in Jim Instances.
