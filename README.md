@@ -26,3 +26,6 @@ https://github.com/brendangregg/Misc/blob/master/java/jmaps
    Brendan Gregg LISA 2013 presentation:
    https://www.youtube.com/watch?v=nZfNehCzGdw
    
+   Slides related to LISA 2013 presentation:
+   http://www.slideshare.net/brendangregg/performance-tuning-ec2-instances/62
+   
