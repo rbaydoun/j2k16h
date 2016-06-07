@@ -1,5 +1,5 @@
-# Heavily inspired by jmaps
-# 13-Feb-2015	Brendan Gregg	Created this.
+# Heavily inspired by jmaps, by Brendan Gregg (13-Feb-2015)
+# https://github.com/brendangregg/Misc/blob/master/java/jmaps
 
 # Requirements:
 #   Linux perf tools --> already setup in Jim Instances.
@@ -8,6 +8,9 @@
 #
 # Usage -- Param 1: Sampling frequency (defaults to 99Hz)
 #          Param 2: Sample time        )defaults to 30s)
+#
+# How to interpret Flame Graphs
+# http://www.slideshare.net/brendangregg/blazing-performance-with-flame-graphs/35
 
 JAVA_HOME=/usr/lib/jvm/j2sdk1.8-oracle
 FLAME_GRAPH_HOME=/home/admin/git/FlameGraph-master
