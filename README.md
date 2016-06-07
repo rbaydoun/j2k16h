@@ -7,8 +7,9 @@ https://github.com/brendangregg/Misc/blob/master/java/jmaps
 * Linux perf tools --> already setup in Jim Instances.
 * The stackcollapse-perf.pl and flamegraph.pl programs come from:
    https://github.com/brendangregg/FlameGraph
+* Java processes are required to have been started with the “-XX:+PreserveFramePointer”
 
-### Usage
+### Usage - Optional Parameters
     Param 1: Sampling frequency (defaults to 99Hz)
     Param 2: Sample time        (defaults to 30s)
  
