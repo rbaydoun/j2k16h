@@ -16,6 +16,8 @@ https://github.com/brendangregg/Misc/blob/master/java/jmaps
 * If you're missing `linux-tools`: `sudo apt-get install linux-tools`
 
 ### Usage - Optional Parameters
+Simply run with `sudo`
+
     Param 1: Sampling frequency (defaults to 99Hz)
     Param 2: Sample time        (defaults to 30s)
 
