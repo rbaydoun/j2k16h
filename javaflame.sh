@@ -127,7 +127,10 @@ eval $cmd
 
 # When done with all the maps, start generating Flame graphs.
 for PID in $(pgrep -x jsvc); do
-	cmd="cat output.tmp | grep $PID | $FLAME_GRAPH_HOME/flamegraph.pl --color=java --hash > flamegraph_$PID.svg"
+	host=$(hostname)
+	date_time=$(date)
+	title="$host - PID $PID @ $date_time"
+	cmd="cat output.tmp | grep $PID | $FLAME_GRAPH_HOME/flamegraph.pl --color=java --title=\"$title\" --hash > flamegraph_$PID.svg"
 	eval $cmd
 done
 

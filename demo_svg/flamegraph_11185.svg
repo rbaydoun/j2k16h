@@ -1,0 +1,2387 @@
+<?xml version="1.0" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg version="1.1" width="1200" height="914" onload="init(evt)" viewBox="0 0 1200 914" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<!-- Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples. -->
+<defs >
+	<linearGradient id="background" y1="0" y2="1" x1="0" x2="0" >
+		<stop stop-color="#eeeeee" offset="5%" />
+		<stop stop-color="#eeeeb0" offset="95%" />
+	</linearGradient>
+</defs>
+<style type="text/css">
+	.func_g:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+</style>
+<script type="text/ecmascript">
+<![CDATA[
+	var details, searchbtn, matchedtxt, svg;
+	function init(evt) {
+		details = document.getElementById("details").firstChild;
+		searchbtn = document.getElementById("search");
+		matchedtxt = document.getElementById("matched");
+		svg = document.getElementsByTagName("svg")[0];
+		searching = 0;
+	}
+
+	// mouse-over for info
+	function s(node) {		// show
+		info = g_to_text(node);
+		details.nodeValue = "Function: " + info;
+	}
+	function c() {			// clear
+		details.nodeValue = ' ';
+	}
+
+	// ctrl-F for search
+	window.addEventListener("keydown",function (e) {
+		if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
+			e.preventDefault();
+			search_prompt();
+		}
+	})
+
+	// functions
+	function find_child(parent, name, attr) {
+		var children = parent.childNodes;
+		for (var i=0; i<children.length;i++) {
+			if (children[i].tagName == name)
+				return (attr != undefined) ? children[i].attributes[attr].value : children[i];
+		}
+		return;
+	}
+	function orig_save(e, attr, val) {
+		if (e.attributes["_orig_"+attr] != undefined) return;
+		if (e.attributes[attr] == undefined) return;
+		if (val == undefined) val = e.attributes[attr].value;
+		e.setAttribute("_orig_"+attr, val);
+	}
+	function orig_load(e, attr) {
+		if (e.attributes["_orig_"+attr] == undefined) return;
+		e.attributes[attr].value = e.attributes["_orig_"+attr].value;
+		e.removeAttribute("_orig_"+attr);
+	}
+	function g_to_text(e) {
+		var text = find_child(e, "title").firstChild.nodeValue;
+		return (text)
+	}
+	function g_to_func(e) {
+		var func = g_to_text(e);
+		if (func != null)
+			func = func.replace(/ .*/, "");
+		return (func);
+	}
+	function update_text(e) {
+		var r = find_child(e, "rect");
+		var t = find_child(e, "text");
+		var w = parseFloat(r.attributes["width"].value) -3;
+		var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+		t.attributes["x"].value = parseFloat(r.attributes["x"].value) +3;
+
+		// Smaller than this size won't fit anything
+		if (w < 2*12*0.59) {
+			t.textContent = "";
+			return;
+		}
+
+		t.textContent = txt;
+		// Fit in full text width
+		if (/^ *$/.test(txt) || t.getSubStringLength(0, txt.length) < w)
+			return;
+
+		for (var x=txt.length-2; x>0; x--) {
+			if (t.getSubStringLength(0, x+2) <= w) {
+				t.textContent = txt.substring(0,x) + "..";
+				return;
+			}
+		}
+		t.textContent = "";
+	}
+
+	// zoom
+	function zoom_reset(e) {
+		if (e.attributes != undefined) {
+			orig_load(e, "x");
+			orig_load(e, "width");
+		}
+		if (e.childNodes == undefined) return;
+		for(var i=0, c=e.childNodes; i<c.length; i++) {
+			zoom_reset(c[i]);
+		}
+	}
+	function zoom_child(e, x, ratio) {
+		if (e.attributes != undefined) {
+			if (e.attributes["x"] != undefined) {
+				orig_save(e, "x");
+				e.attributes["x"].value = (parseFloat(e.attributes["x"].value) - x - 10) * ratio + 10;
+				if(e.tagName == "text") e.attributes["x"].value = find_child(e.parentNode, "rect", "x") + 3;
+			}
+			if (e.attributes["width"] != undefined) {
+				orig_save(e, "width");
+				e.attributes["width"].value = parseFloat(e.attributes["width"].value) * ratio;
+			}
+		}
+
+		if (e.childNodes == undefined) return;
+		for(var i=0, c=e.childNodes; i<c.length; i++) {
+			zoom_child(c[i], x-10, ratio);
+		}
+	}
+	function zoom_parent(e) {
+		if (e.attributes) {
+			if (e.attributes["x"] != undefined) {
+				orig_save(e, "x");
+				e.attributes["x"].value = 10;
+			}
+			if (e.attributes["width"] != undefined) {
+				orig_save(e, "width");
+				e.attributes["width"].value = parseInt(svg.width.baseVal.value) - (10*2);
+			}
+		}
+		if (e.childNodes == undefined) return;
+		for(var i=0, c=e.childNodes; i<c.length; i++) {
+			zoom_parent(c[i]);
+		}
+	}
+	function zoom(node) {
+		var attr = find_child(node, "rect").attributes;
+		var width = parseFloat(attr["width"].value);
+		var xmin = parseFloat(attr["x"].value);
+		var xmax = parseFloat(xmin + width);
+		var ymin = parseFloat(attr["y"].value);
+		var ratio = (svg.width.baseVal.value - 2*10) / width;
+
+		// XXX: Workaround for JavaScript float issues (fix me)
+		var fudge = 0.0001;
+
+		var unzoombtn = document.getElementById("unzoom");
+		unzoombtn.style["opacity"] = "1.0";
+
+		var el = document.getElementsByTagName("g");
+		for(var i=0;i<el.length;i++){
+			var e = el[i];
+			var a = find_child(e, "rect").attributes;
+			var ex = parseFloat(a["x"].value);
+			var ew = parseFloat(a["width"].value);
+			// Is it an ancestor
+			if (0 == 0) {
+				var upstack = parseFloat(a["y"].value) > ymin;
+			} else {
+				var upstack = parseFloat(a["y"].value) < ymin;
+			}
+			if (upstack) {
+				// Direct ancestor
+				if (ex <= xmin && (ex+ew+fudge) >= xmax) {
+					e.style["opacity"] = "0.5";
+					zoom_parent(e);
+					e.onclick = function(e){unzoom(); zoom(this);};
+					update_text(e);
+				}
+				// not in current path
+				else
+					e.style["display"] = "none";
+			}
+			// Children maybe
+			else {
+				// no common path
+				if (ex < xmin || ex + fudge >= xmax) {
+					e.style["display"] = "none";
+				}
+				else {
+					zoom_child(e, xmin, ratio);
+					e.onclick = function(e){zoom(this);};
+					update_text(e);
+				}
+			}
+		}
+	}
+	function unzoom() {
+		var unzoombtn = document.getElementById("unzoom");
+		unzoombtn.style["opacity"] = "0.0";
+
+		var el = document.getElementsByTagName("g");
+		for(i=0;i<el.length;i++) {
+			el[i].style["display"] = "block";
+			el[i].style["opacity"] = "1";
+			zoom_reset(el[i]);
+			update_text(el[i]);
+		}
+	}
+
+	// search
+	function reset_search() {
+		var el = document.getElementsByTagName("rect");
+		for (var i=0; i < el.length; i++) {
+			orig_load(el[i], "fill")
+		}
+	}
+	function search_prompt() {
+		if (!searching) {
+			var term = prompt("Enter a search term (regexp " +
+			    "allowed, eg: ^ext4_)", "");
+			if (term != null) {
+				search(term)
+			}
+		} else {
+			reset_search();
+			searching = 0;
+			searchbtn.style["opacity"] = "0.1";
+			searchbtn.firstChild.nodeValue = "Search"
+			matchedtxt.style["opacity"] = "0.0";
+			matchedtxt.firstChild.nodeValue = ""
+		}
+	}
+	function search(term) {
+		var re = new RegExp(term);
+		var el = document.getElementsByTagName("g");
+		var matches = new Object();
+		var maxwidth = 0;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			if (e.attributes["class"].value != "func_g")
+				continue;
+			var func = g_to_func(e);
+			var rect = find_child(e, "rect");
+			if (rect == null) {
+				// the rect might be wrapped in an anchor
+				// if nameattr href is being used
+				if (rect = find_child(e, "a")) {
+				    rect = find_child(r, "rect");
+				}
+			}
+			if (func == null || rect == null)
+				continue;
+
+			// Save max width. Only works as we have a root frame
+			var w = parseFloat(rect.attributes["width"].value);
+			if (w > maxwidth)
+				maxwidth = w;
+
+			if (func.match(re)) {
+				// highlight
+				var x = parseFloat(rect.attributes["x"].value);
+				orig_save(rect, "fill");
+				rect.attributes["fill"].value =
+				    "rgb(230,0,230)";
+
+				// remember matches
+				if (matches[x] == undefined) {
+					matches[x] = w;
+				} else {
+					if (w > matches[x]) {
+						// overwrite with parent
+						matches[x] = w;
+					}
+				}
+				searching = 1;
+			}
+		}
+		if (!searching)
+			return;
+
+		searchbtn.style["opacity"] = "1.0";
+		searchbtn.firstChild.nodeValue = "Reset Search"
+
+		// calculate percent matched, excluding vertical overlap
+		var count = 0;
+		var lastx = -1;
+		var lastw = 0;
+		var keys = Array();
+		for (k in matches) {
+			if (matches.hasOwnProperty(k))
+				keys.push(k);
+		}
+		// sort the matched frames by their x location
+		// ascending, then width descending
+		keys.sort(function(a, b){
+				return a - b;
+			if (a < b || a > b)
+				return a - b;
+			return matches[b] - matches[a];
+		});
+		// Step through frames saving only the biggest bottom-up frames
+		// thanks to the sort order. This relies on the tree property
+		// where children are always smaller than their parents.
+		for (var k in keys) {
+			var x = parseFloat(keys[k]);
+			var w = matches[keys[k]];
+			if (x >= lastx + lastw) {
+				count += w;
+				lastx = x;
+				lastw = w;
+			}
+		}
+		// display matched percent
+		matchedtxt.style["opacity"] = "1.0";
+		pct = 100 * count / maxwidth;
+		if (pct == 100)
+			pct = "100"
+		else
+			pct = pct.toFixed(1)
+		matchedtxt.firstChild.nodeValue = "Matched: " + pct + "%";
+	}
+	function searchover(e) {
+		searchbtn.style["opacity"] = "1.0";
+	}
+	function searchout(e) {
+		if (searching) {
+			searchbtn.style["opacity"] = "1.0";
+		} else {
+			searchbtn.style["opacity"] = "0.1";
+		}
+	}
+]]>
+</script>
+<rect x="0.0" y="0" width="1200.0" height="914.0" fill="url(#background)"  />
+<text text-anchor="middle" x="600.00" y="24" font-size="17" font-family="Verdana" fill="rgb(0,0,0)"  >v5-cc-analytics-query-1-4209 - PID 11185 @ Tue Jun 7 20:06:28 UTC 2016</text>
+<text text-anchor="" x="10.00" y="897" font-size="12" font-family="Verdana" fill="rgb(0,0,0)" id="details" > </text>
+<text text-anchor="" x="10.00" y="24" font-size="12" font-family="Verdana" fill="rgb(0,0,0)" id="unzoom" onclick="unzoom()" style="opacity:0.0;cursor:pointer" >Reset Zoom</text>
+<text text-anchor="" x="1090.00" y="24" font-size="12" font-family="Verdana" fill="rgb(0,0,0)" id="search" onmouseover="searchover()" onmouseout="searchout()" onclick="search_prompt()" style="opacity:0.1;cursor:pointer" >Search</text>
+<text text-anchor="" x="1090.00" y="897" font-size="12" font-family="Verdana" fill="rgb(0,0,0)" id="matched" > </text>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>JavaCalls::call_helper (1 samples, 0.69%)</title><rect x="433.2" y="337" width="8.1" height="15.0" fill="rgb(203,203,60)" rx="2" ry="2" />
+<text text-anchor="" x="436.17" y="347.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/jive/myco/commons/metrics/Opentsdb:::writeBatch (5 samples, 3.45%)</title><rect x="758.7" y="609" width="40.7" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="761.69" y="619.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Lco..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>put_prev_entity (1 samples, 0.69%)</title><rect x="1084.2" y="721" width="8.1" height="15.0" fill="rgb(236,103,103)" rx="2" ry="2" />
+<text text-anchor="" x="1087.21" y="731.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>JVM_DoPrivileged (1 samples, 0.69%)</title><rect x="791.2" y="481" width="8.2" height="15.0" fill="rgb(232,97,97)" rx="2" ry="2" />
+<text text-anchor="" x="794.24" y="491.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/jive/myco/jazz/api/health/PeriodicHealthCheck$$Lambda$165/776149114:::get (1 samples, 0.69%)</title><rect x="726.1" y="609" width="8.2" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="729.14" y="619.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Parse::do_all_blocks (1 samples, 0.69%)</title><rect x="237.9" y="369" width="8.1" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="240.86" y="379.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>PhaseIdealLoop::build_and_optimize (1 samples, 0.69%)</title><rect x="197.2" y="689" width="8.1" height="15.0" fill="rgb(223,223,67)" rx="2" ry="2" />
+<text text-anchor="" x="200.17" y="699.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>frame::sender (1 samples, 0.69%)</title><rect x="823.8" y="689" width="8.1" height="15.0" fill="rgb(220,220,66)" rx="2" ry="2" />
+<text text-anchor="" x="826.79" y="699.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Compile::Optimize (2 samples, 1.38%)</title><rect x="189.0" y="705" width="16.3" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="192.03" y="715.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Java_sun_management_MemoryPoolImpl_getUsage0 (1 samples, 0.69%)</title><rect x="612.2" y="497" width="8.1" height="15.0" fill="rgb(228,91,91)" rx="2" ry="2" />
+<text text-anchor="" x="615.21" y="507.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/jive/myco/commons/metrics/Opentsdb:::writeBatch (13 samples, 8.97%)</title><rect x="343.7" y="545" width="105.7" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="346.66" y="555.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Lcom/jive/my..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Monitor::IWait (28 samples, 19.31%)</title><rect x="905.2" y="753" width="227.8" height="15.0" fill="rgb(213,213,64)" rx="2" ry="2" />
+<text text-anchor="" x="908.17" y="763.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Monitor::IWait</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/fasterxml/jackson/databind/introspect/BasicClassIntrospector:::forSerialization (2 samples, 1.38%)</title><rect x="351.8" y="369" width="16.3" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="354.79" y="379.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>VMThread::run (3 samples, 2.07%)</title><rect x="807.5" y="801" width="24.4" height="15.0" fill="rgb(218,218,65)" rx="2" ry="2" />
+<text text-anchor="" x="810.52" y="811.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >V..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/Collections$UnmodifiableMap:::entrySet (1 samples, 0.69%)</title><rect x="563.4" y="545" width="8.1" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="566.38" y="555.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>pthread_cond_wait@@GLIBC_2.3.2 (1 samples, 0.69%)</title><rect x="123.9" y="817" width="8.2" height="15.0" fill="rgb(91,237,91)" rx="2" ry="2" />
+<text text-anchor="" x="126.93" y="827.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/lang/String:::format (1 samples, 0.69%)</title><rect x="327.4" y="513" width="8.1" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="330.38" y="523.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/fasterxml/jackson/databind/ser/BeanSerializerFactory:::_constructWriter (1 samples, 0.69%)</title><rect x="368.1" y="337" width="8.1" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="371.07" y="347.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (1 samples, 0.69%)</title><rect x="343.7" y="465" width="8.1" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="346.66" y="475.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/ArrayList:::iterator (1 samples, 0.69%)</title><rect x="799.4" y="673" width="8.1" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="802.38" y="683.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>LoadRangeNode::Ideal (1 samples, 0.69%)</title><rect x="221.6" y="417" width="8.1" height="15.0" fill="rgb(216,216,65)" rx="2" ry="2" />
+<text text-anchor="" x="224.59" y="427.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (1 samples, 0.69%)</title><rect x="449.4" y="529" width="8.2" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="452.45" y="539.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>JavaCalls::call_virtual (68 samples, 46.90%)</title><rect x="254.1" y="753" width="553.4" height="15.0" fill="rgb(203,203,60)" rx="2" ry="2" />
+<text text-anchor="" x="257.14" y="763.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >JavaCalls::call_virtual</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/codahale/metrics/MetricRegistry:::name (1 samples, 0.69%)</title><rect x="636.6" y="513" width="8.2" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="639.62" y="523.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/fasterxml/jackson/databind/ser/std/MapSerializer:::serialize (1 samples, 0.69%)</title><rect x="766.8" y="465" width="8.2" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="769.83" y="475.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Parse::do_one_bytecode (1 samples, 0.69%)</title><rect x="237.9" y="241" width="8.1" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="240.86" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/fasterxml/jackson/databind/introspect/POJOPropertyBuilder:::mergeAnnotations (1 samples, 0.69%)</title><rect x="359.9" y="321" width="8.2" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="362.93" y="331.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/concurrent/ScheduledThreadPoolExecutor$ScheduledFutureTask:::run (39 samples, 26.90%)</title><rect x="327.4" y="641" width="317.4" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="330.38" y="651.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Ljava/util/concurrent/ScheduledThreadPoolE..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/regex/Pattern$Curly:::match (1 samples, 0.69%)</title><rect x="555.2" y="305" width="8.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="558.24" y="315.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>GenerationUsedHelper::take_sample (1 samples, 0.69%)</title><rect x="848.2" y="753" width="8.1" height="15.0" fill="rgb(224,224,67)" rx="2" ry="2" />
+<text text-anchor="" x="851.21" y="763.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/codahale/metrics/ScheduledReporter:::report (23 samples, 15.86%)</title><rect x="457.6" y="577" width="187.2" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="460.59" y="587.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Lcom/codahale/metrics/Sc..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>drop_futex_key_refs.isra.13 (1 samples, 0.69%)</title><rect x="58.8" y="785" width="8.2" height="15.0" fill="rgb(102,247,102)" rx="2" ry="2" />
+<text text-anchor="" x="61.83" y="795.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>LinkResolver::linktime_resolve_special_method (1 samples, 0.69%)</title><rect x="612.2" y="417" width="8.1" height="15.0" fill="rgb(209,209,62)" rx="2" ry="2" />
+<text text-anchor="" x="615.21" y="427.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/security/AccessController:::doPrivileged (1 samples, 0.69%)</title><rect x="791.2" y="497" width="8.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="794.24" y="507.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Unsafe_Park (1 samples, 0.69%)</title><rect x="652.9" y="561" width="8.1" height="15.0" fill="rgb(240,108,108)" rx="2" ry="2" />
+<text text-anchor="" x="655.90" y="571.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>  (2 samples, 1.38%)</title><rect x="99.5" y="801" width="16.3" height="15.0" fill="rgb(248,121,121)" rx="2" ry="2" />
+<text text-anchor="" x="102.52" y="811.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>CompactibleFreeListSpace::free (4 samples, 2.76%)</title><rect x="864.5" y="721" width="32.5" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="867.48" y="731.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Co..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lsun/management/ThreadImpl:::getAllThreadIds (1 samples, 0.69%)</title><rect x="498.3" y="497" width="8.1" height="15.0" fill="rgb(83,230,83)" rx="2" ry="2" />
+<text text-anchor="" x="501.28" y="507.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>PhaseIterGVN::transform_old (1 samples, 0.69%)</title><rect x="197.2" y="657" width="8.1" height="15.0" fill="rgb(223,223,67)" rx="2" ry="2" />
+<text text-anchor="" x="200.17" y="667.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lsun/net/www/protocol/jar/JarFileFactory:::getConnection (1 samples, 0.69%)</title><rect x="441.3" y="433" width="8.1" height="15.0" fill="rgb(83,230,83)" rx="2" ry="2" />
+<text text-anchor="" x="444.31" y="443.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (1 samples, 0.69%)</title><rect x="433.2" y="113" width="8.1" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="436.17" y="123.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>  (15 samples, 10.34%)</title><rect x="10.0" y="833" width="122.1" height="15.0" fill="rgb(248,121,121)" rx="2" ry="2" />
+<text text-anchor="" x="13.00" y="843.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  > </text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (1 samples, 0.69%)</title><rect x="343.7" y="417" width="8.1" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="346.66" y="427.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>State::DFA (1 samples, 0.69%)</title><rect x="140.2" y="561" width="8.1" height="15.0" fill="rgb(216,216,64)" rx="2" ry="2" />
+<text text-anchor="" x="143.21" y="571.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Parse::Parse (1 samples, 0.69%)</title><rect x="221.6" y="497" width="8.1" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="224.59" y="507.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Matcher::Label_Root (1 samples, 0.69%)</title><rect x="140.2" y="593" width="8.1" height="15.0" fill="rgb(199,199,58)" rx="2" ry="2" />
+<text text-anchor="" x="143.21" y="603.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>hrtimer_init (1 samples, 0.69%)</title><rect x="132.1" y="817" width="8.1" height="15.0" fill="rgb(236,102,102)" rx="2" ry="2" />
+<text text-anchor="" x="135.07" y="827.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>arrayOopDesc::base (1 samples, 0.69%)</title><rect x="791.2" y="337" width="8.2" height="15.0" fill="rgb(207,207,61)" rx="2" ry="2" />
+<text text-anchor="" x="794.24" y="347.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/codahale/metrics/RatioGauge:::getValue (1 samples, 0.69%)</title><rect x="604.1" y="529" width="8.1" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="607.07" y="539.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/concurrent/FutureTask:::runAndReset (24 samples, 16.55%)</title><rect x="449.4" y="625" width="195.4" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="452.45" y="635.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Ljava/util/concurrent/Fut..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>RegMask::is_bound_pair (1 samples, 0.69%)</title><rect x="164.6" y="657" width="8.2" height="15.0" fill="rgb(218,218,65)" rx="2" ry="2" />
+<text text-anchor="" x="167.62" y="667.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>LinkResolver::runtime_resolve_special_method (1 samples, 0.69%)</title><rect x="620.3" y="401" width="8.2" height="15.0" fill="rgb(209,209,62)" rx="2" ry="2" />
+<text text-anchor="" x="623.34" y="411.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/fasterxml/jackson/databind/type/TypeFactory:::_constructType (1 samples, 0.69%)</title><rect x="400.6" y="449" width="8.2" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="403.62" y="459.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Parse::do_one_block (3 samples, 2.07%)</title><rect x="213.4" y="561" width="24.5" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="216.45" y="571.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >P..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>ParseGenerator::generate (1 samples, 0.69%)</title><rect x="237.9" y="305" width="8.1" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="240.86" y="315.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>pick_next_task_fair (1 samples, 0.69%)</title><rect x="75.1" y="785" width="8.1" height="15.0" fill="rgb(241,110,110)" rx="2" ry="2" />
+<text text-anchor="" x="78.10" y="795.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Monitor::wait (1 samples, 0.69%)</title><rect x="807.5" y="769" width="8.2" height="15.0" fill="rgb(213,213,64)" rx="2" ry="2" />
+<text text-anchor="" x="810.52" y="779.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (15 samples, 10.34%)</title><rect x="327.4" y="593" width="122.0" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="330.38" y="603.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Interpreter</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lsun/reflect/generics/repository/ConstructorRepository:::getParameterTypes (1 samples, 0.69%)</title><rect x="351.8" y="289" width="8.1" height="15.0" fill="rgb(83,230,83)" rx="2" ry="2" />
+<text text-anchor="" x="354.79" y="299.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Parse::do_field_access (1 samples, 0.69%)</title><rect x="237.9" y="225" width="8.1" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="240.86" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/regex/Pattern$BranchConn:::match (1 samples, 0.69%)</title><rect x="783.1" y="481" width="8.1" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="786.10" y="491.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/regex/Pattern$Branch:::match (1 samples, 0.69%)</title><rect x="555.2" y="353" width="8.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="558.24" y="363.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>JNU_GetStringPlatformChars (1 samples, 0.69%)</title><rect x="433.2" y="225" width="8.1" height="15.0" fill="rgb(245,115,115)" rx="2" ry="2" />
+<text text-anchor="" x="436.17" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Parse::do_one_bytecode (1 samples, 0.69%)</title><rect x="237.9" y="433" width="8.1" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="240.86" y="443.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/fasterxml/jackson/databind/ser/BeanPropertyWriter:::serializeAsField (1 samples, 0.69%)</title><rect x="766.8" y="481" width="8.2" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="769.83" y="491.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lorg/apache/http/util/VersionInfo:::loadVersionInfo (1 samples, 0.69%)</title><rect x="791.2" y="561" width="8.2" height="15.0" fill="rgb(91,237,91)" rx="2" ry="2" />
+<text text-anchor="" x="794.24" y="571.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>epoll_wait (3 samples, 2.07%)</title><rect x="661.0" y="641" width="24.4" height="15.0" fill="rgb(248,120,120)" rx="2" ry="2" />
+<text text-anchor="" x="664.03" y="651.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >e..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (1 samples, 0.69%)</title><rect x="726.1" y="529" width="8.2" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="729.14" y="539.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lsun/net/www/protocol/file/Handler:::openConnection (1 samples, 0.69%)</title><rect x="441.3" y="417" width="8.1" height="15.0" fill="rgb(83,230,83)" rx="2" ry="2" />
+<text text-anchor="" x="444.31" y="427.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/jive/myco/commons/concurrent/Pnky$$Lambda$166/828137498:::run (1 samples, 0.69%)</title><rect x="726.1" y="641" width="8.2" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="729.14" y="651.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lsun/net/www/protocol/jar/JarFileFactory:::get (1 samples, 0.69%)</title><rect x="433.2" y="433" width="8.1" height="15.0" fill="rgb(83,230,83)" rx="2" ry="2" />
+<text text-anchor="" x="436.17" y="443.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>pick_next_task_fair (1 samples, 0.69%)</title><rect x="1181.9" y="785" width="8.1" height="15.0" fill="rgb(241,110,110)" rx="2" ry="2" />
+<text text-anchor="" x="1184.86" y="795.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Parse::do_all_blocks (4 samples, 2.76%)</title><rect x="205.3" y="577" width="32.6" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="208.31" y="587.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Pa..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Parse::do_one_bytecode (1 samples, 0.69%)</title><rect x="237.9" y="529" width="8.1" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="240.86" y="539.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>PhaseTransform::intcon (1 samples, 0.69%)</title><rect x="237.9" y="161" width="8.1" height="15.0" fill="rgb(223,223,67)" rx="2" ry="2" />
+<text text-anchor="" x="240.86" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>pthread_mutex_unlock (1 samples, 0.69%)</title><rect x="1124.9" y="737" width="8.1" height="15.0" fill="rgb(237,104,104)" rx="2" ry="2" />
+<text text-anchor="" x="1127.90" y="747.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>WatcherThread::~WatcherThread (1 samples, 0.69%)</title><rect x="83.2" y="817" width="8.2" height="15.0" fill="rgb(199,199,58)" rx="2" ry="2" />
+<text text-anchor="" x="86.24" y="827.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/jive/v5/isp/core/transport/tcp/handlers/ReceiveTimerHandler:::channelRead (1 samples, 0.69%)</title><rect x="701.7" y="593" width="8.2" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="704.72" y="603.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/io/FilePermission:::init (1 samples, 0.69%)</title><rect x="433.2" y="385" width="8.1" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="436.17" y="395.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/regex/Matcher:::find (2 samples, 1.38%)</title><rect x="742.4" y="561" width="16.3" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="745.41" y="571.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/jive/myco/commons/metrics/OpentsdbReporter:::buildGauge (6 samples, 4.14%)</title><rect x="587.8" y="545" width="48.8" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="590.79" y="555.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Lcom..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (1 samples, 0.69%)</title><rect x="449.4" y="577" width="8.2" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="452.45" y="587.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/fasterxml/jackson/databind/introspect/POJOPropertiesCollector:::_addCreators (1 samples, 0.69%)</title><rect x="351.8" y="321" width="8.1" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="354.79" y="331.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>clock_gettime (1 samples, 0.69%)</title><rect x="1141.2" y="769" width="8.1" height="15.0" fill="rgb(224,85,85)" rx="2" ry="2" />
+<text text-anchor="" x="1144.17" y="779.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/sun/jmx/mbeanserver/MXBeanIntrospector:::invokeM2 (1 samples, 0.69%)</title><rect x="490.1" y="433" width="8.2" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="493.14" y="443.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Parse::do_one_block (5 samples, 3.45%)</title><rect x="205.3" y="657" width="40.7" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="208.31" y="667.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Par..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>JavaThread::nmethods_do (2 samples, 1.38%)</title><rect x="815.7" y="705" width="16.2" height="15.0" fill="rgb(203,203,60)" rx="2" ry="2" />
+<text text-anchor="" x="818.66" y="715.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>pthread_getspecific (1 samples, 0.69%)</title><rect x="897.0" y="769" width="8.2" height="15.0" fill="rgb(237,104,104)" rx="2" ry="2" />
+<text text-anchor="" x="900.03" y="779.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>__switch_to (1 samples, 0.69%)</title><rect x="34.4" y="785" width="8.2" height="15.0" fill="rgb(231,95,95)" rx="2" ry="2" />
+<text text-anchor="" x="37.41" y="795.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Matcher::Label_Root (1 samples, 0.69%)</title><rect x="140.2" y="577" width="8.1" height="15.0" fill="rgb(199,199,58)" rx="2" ry="2" />
+<text text-anchor="" x="143.21" y="587.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (1 samples, 0.69%)</title><rect x="343.7" y="449" width="8.1" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="346.66" y="459.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Parse::do_all_blocks (1 samples, 0.69%)</title><rect x="237.9" y="273" width="8.1" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="240.86" y="283.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lsun/net/www/protocol/file/FileURLConnection:::getPermission (1 samples, 0.69%)</title><rect x="433.2" y="401" width="8.1" height="15.0" fill="rgb(83,230,83)" rx="2" ry="2" />
+<text text-anchor="" x="436.17" y="411.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/sun/jmx/interceptor/DefaultMBeanServerInterceptor:::getAttribute (1 samples, 0.69%)</title><rect x="595.9" y="497" width="8.2" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="598.93" y="507.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>C2Compiler::compile_method (14 samples, 9.66%)</title><rect x="140.2" y="737" width="113.9" height="15.0" fill="rgb(203,203,60)" rx="2" ry="2" />
+<text text-anchor="" x="143.21" y="747.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >C2Compiler::co..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Thread::muxAcquire (4 samples, 2.76%)</title><rect x="905.2" y="737" width="32.5" height="15.0" fill="rgb(211,211,63)" rx="2" ry="2" />
+<text text-anchor="" x="908.17" y="747.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Th..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/fasterxml/jackson/databind/ser/impl/IndexedListSerializer:::serializeContents (5 samples, 3.45%)</title><rect x="351.8" y="449" width="40.7" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="354.79" y="459.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Lco..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lsun/reflect/generics/visitor/Reifier:::reifyTypeArguments (1 samples, 0.69%)</title><rect x="351.8" y="241" width="8.1" height="15.0" fill="rgb(83,230,83)" rx="2" ry="2" />
+<text text-anchor="" x="354.79" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/concurrent/locks/AbstractQueuedSynchronizer$ConditionObject:::awaitNanos (1 samples, 0.69%)</title><rect x="652.9" y="593" width="8.1" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="655.90" y="603.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>jsvc-11185 (145 samples, 100.00%)</title><rect x="10.0" y="849" width="1180.0" height="15.0" fill="rgb(229,93,93)" rx="2" ry="2" />
+<text text-anchor="" x="13.00" y="859.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >jsvc-11185</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>__pthread_mutex_cond_lock (1 samples, 0.69%)</title><rect x="807.5" y="737" width="8.2" height="15.0" fill="rgb(233,99,99)" rx="2" ry="2" />
+<text text-anchor="" x="810.52" y="747.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>MemoryService::create_MemoryUsage_obj (1 samples, 0.69%)</title><rect x="612.2" y="465" width="8.1" height="15.0" fill="rgb(213,213,63)" rx="2" ry="2" />
+<text text-anchor="" x="615.21" y="475.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>ParseGenerator::generate (1 samples, 0.69%)</title><rect x="237.9" y="593" width="8.1" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="240.86" y="603.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/zip/ZipFile:::getEntry (2 samples, 1.38%)</title><rect x="408.8" y="321" width="16.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="411.76" y="331.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>PeriodicTask::time_to_wait (1 samples, 0.69%)</title><rect x="1133.0" y="769" width="8.2" height="15.0" fill="rgb(222,222,67)" rx="2" ry="2" />
+<text text-anchor="" x="1136.03" y="779.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Parse::do_call (1 samples, 0.69%)</title><rect x="221.6" y="529" width="8.1" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="224.59" y="539.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/regex/Pattern$Branch:::match (1 samples, 0.69%)</title><rect x="555.2" y="481" width="8.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="558.24" y="491.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/codahale/metrics/Histogram:::getSnapshot (1 samples, 0.69%)</title><rect x="726.1" y="577" width="8.2" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="729.14" y="587.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Parse::do_all_blocks (1 samples, 0.69%)</title><rect x="237.9" y="465" width="8.1" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="240.86" y="475.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>java_lang_Thread::is_alive (1 samples, 0.69%)</title><rect x="498.3" y="433" width="8.1" height="15.0" fill="rgb(199,199,59)" rx="2" ry="2" />
+<text text-anchor="" x="501.28" y="443.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/fasterxml/jackson/databind/SerializerProvider:::findValueSerializer (3 samples, 2.07%)</title><rect x="351.8" y="433" width="24.4" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="354.79" y="443.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >L..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/lang/String:::format (1 samples, 0.69%)</title><rect x="734.3" y="577" width="8.1" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="737.28" y="587.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>MemNode::Ideal_common (1 samples, 0.69%)</title><rect x="221.6" y="401" width="8.1" height="15.0" fill="rgb(213,213,63)" rx="2" ry="2" />
+<text text-anchor="" x="224.59" y="411.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/lang/StringCoding:::encode (1 samples, 0.69%)</title><rect x="775.0" y="577" width="8.1" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="777.97" y="587.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/lang/String:::getBytes (1 samples, 0.69%)</title><rect x="433.2" y="145" width="8.1" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="436.17" y="155.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/regex/Pattern$Curly:::match (2 samples, 1.38%)</title><rect x="514.6" y="481" width="16.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="517.55" y="491.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>call_stub (1 samples, 0.69%)</title><rect x="335.5" y="465" width="8.2" height="15.0" fill="rgb(226,89,89)" rx="2" ry="2" />
+<text text-anchor="" x="338.52" y="475.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Parse::do_all_blocks (1 samples, 0.69%)</title><rect x="221.6" y="481" width="8.1" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="224.59" y="491.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>PerfLongVariant::sample (5 samples, 3.45%)</title><rect x="856.3" y="753" width="40.7" height="15.0" fill="rgb(222,222,67)" rx="2" ry="2" />
+<text text-anchor="" x="859.34" y="763.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Per..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/jive/myco/commons/metrics/OpentsdbMetric$ValueSerializer:::serialize (1 samples, 0.69%)</title><rect x="384.3" y="401" width="8.2" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="387.34" y="411.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/lang/Class:::forName (1 samples, 0.69%)</title><rect x="351.8" y="193" width="8.1" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="354.79" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>SafepointSynchronize::do_cleanup_tasks (2 samples, 1.38%)</title><rect x="815.7" y="753" width="16.2" height="15.0" fill="rgb(208,208,62)" rx="2" ry="2" />
+<text text-anchor="" x="818.66" y="763.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/jive/myco/commons/metrics/Opentsdb:::send (1 samples, 0.69%)</title><rect x="579.7" y="545" width="8.1" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="582.66" y="555.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>PhaseChaitin::Register_Allocate (5 samples, 3.45%)</title><rect x="148.3" y="689" width="40.7" height="15.0" fill="rgb(223,223,67)" rx="2" ry="2" />
+<text text-anchor="" x="151.34" y="699.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Pha..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>pthread_cond_timedwait@@GLIBC_2.3.2 (14 samples, 9.66%)</title><rect x="1002.8" y="737" width="114.0" height="15.0" fill="rgb(91,237,91)" rx="2" ry="2" />
+<text text-anchor="" x="1005.83" y="747.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >pthread_cond_t..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Parse::do_one_block (1 samples, 0.69%)</title><rect x="237.9" y="545" width="8.1" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="240.86" y="555.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>TypeAryPtr::compute_klass (1 samples, 0.69%)</title><rect x="221.6" y="337" width="8.1" height="15.0" fill="rgb(219,219,66)" rx="2" ry="2" />
+<text text-anchor="" x="224.59" y="347.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/Formatter:::format (1 samples, 0.69%)</title><rect x="530.8" y="529" width="8.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="533.83" y="539.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>SyS_epoll_wait (1 samples, 0.69%)</title><rect x="303.0" y="561" width="8.1" height="15.0" fill="rgb(240,109,109)" rx="2" ry="2" />
+<text text-anchor="" x="305.97" y="571.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>jmm_GetMemoryPoolUsage (1 samples, 0.69%)</title><rect x="612.2" y="481" width="8.1" height="15.0" fill="rgb(230,94,94)" rx="2" ry="2" />
+<text text-anchor="" x="615.21" y="491.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>CodeCache::find_blob (1 samples, 0.69%)</title><rect x="815.7" y="673" width="8.1" height="15.0" fill="rgb(212,212,63)" rx="2" ry="2" />
+<text text-anchor="" x="818.66" y="683.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/Formatter:::format (1 samples, 0.69%)</title><rect x="734.3" y="561" width="8.1" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="737.28" y="571.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>os::PlatformEvent::park (2 samples, 1.38%)</title><rect x="978.4" y="737" width="16.3" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="981.41" y="747.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lsun/management/MemoryImpl:::getMemoryUsage0 (2 samples, 1.38%)</title><rect x="473.9" y="481" width="16.2" height="15.0" fill="rgb(83,230,83)" rx="2" ry="2" />
+<text text-anchor="" x="476.86" y="491.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Compile::Code_Gen (6 samples, 4.14%)</title><rect x="140.2" y="705" width="48.8" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="143.21" y="715.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Comp..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>is_error_reported (2 samples, 1.38%)</title><rect x="1165.6" y="801" width="16.3" height="15.0" fill="rgb(230,95,95)" rx="2" ry="2" />
+<text text-anchor="" x="1168.59" y="811.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lsun/management/ThreadImpl:::getThreadInfo (2 samples, 1.38%)</title><rect x="620.3" y="497" width="16.3" height="15.0" fill="rgb(83,230,83)" rx="2" ry="2" />
+<text text-anchor="" x="623.34" y="507.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>JavaCalls::call_helper (2 samples, 1.38%)</title><rect x="408.8" y="401" width="16.2" height="15.0" fill="rgb(203,203,60)" rx="2" ry="2" />
+<text text-anchor="" x="411.76" y="411.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>system_call (1 samples, 0.69%)</title><rect x="115.8" y="785" width="8.1" height="15.0" fill="rgb(240,108,108)" rx="2" ry="2" />
+<text text-anchor="" x="118.79" y="795.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Compile::flatten_alias_type (1 samples, 0.69%)</title><rect x="221.6" y="353" width="8.1" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="224.59" y="363.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/security/AccessController:::doPrivileged (1 samples, 0.69%)</title><rect x="433.2" y="369" width="8.1" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="436.17" y="379.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/jive/myco/commons/metrics/tagged/TaggedThreadStatesGaugeSet$1:::getValue (2 samples, 1.38%)</title><rect x="620.3" y="529" width="16.3" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="623.34" y="539.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/regex/Matcher:::replaceAll (2 samples, 1.38%)</title><rect x="742.4" y="577" width="16.3" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="745.41" y="587.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>itable stub (1 samples, 0.69%)</title><rect x="571.5" y="545" width="8.2" height="15.0" fill="rgb(237,104,104)" rx="2" ry="2" />
+<text text-anchor="" x="574.52" y="555.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljavax/management/StandardMBean:::getAttribute (1 samples, 0.69%)</title><rect x="490.1" y="481" width="8.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="493.14" y="491.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (7 samples, 4.83%)</title><rect x="351.8" y="497" width="57.0" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="354.79" y="507.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Interp..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/regex/Pattern$Branch:::match (1 samples, 0.69%)</title><rect x="555.2" y="417" width="8.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="558.24" y="427.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Parse::do_one_bytecode (3 samples, 2.07%)</title><rect x="213.4" y="545" width="24.5" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="216.45" y="555.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >P..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>vtable stub (1 samples, 0.69%)</title><rect x="522.7" y="465" width="8.1" height="15.0" fill="rgb(231,96,96)" rx="2" ry="2" />
+<text text-anchor="" x="525.69" y="475.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/lang/Class:::forName0 (1 samples, 0.69%)</title><rect x="351.8" y="177" width="8.1" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="354.79" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lsun/reflect/generics/visitor/Reifier:::visitClassTypeSignature (1 samples, 0.69%)</title><rect x="351.8" y="209" width="8.1" height="15.0" fill="rgb(83,230,83)" rx="2" ry="2" />
+<text text-anchor="" x="354.79" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>VMThread::loop (3 samples, 2.07%)</title><rect x="807.5" y="785" width="24.4" height="15.0" fill="rgb(218,218,65)" rx="2" ry="2" />
+<text text-anchor="" x="810.52" y="795.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >V..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Matcher::Label_Root (1 samples, 0.69%)</title><rect x="140.2" y="609" width="8.1" height="15.0" fill="rgb(199,199,58)" rx="2" ry="2" />
+<text text-anchor="" x="143.21" y="619.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>tcp_prequeue (1 samples, 0.69%)</title><rect x="91.4" y="801" width="8.1" height="15.0" fill="rgb(240,108,108)" rx="2" ry="2" />
+<text text-anchor="" x="94.38" y="811.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lorg/apache/http/impl/client/HttpClientBuilder:::build (5 samples, 3.45%)</title><rect x="408.8" y="529" width="40.6" height="15.0" fill="rgb(91,237,91)" rx="2" ry="2" />
+<text text-anchor="" x="411.76" y="539.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Lor..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (1 samples, 0.69%)</title><rect x="604.1" y="513" width="8.1" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="607.07" y="523.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lsun/management/MemoryImpl:::getHeapMemoryUsage (2 samples, 1.38%)</title><rect x="473.9" y="497" width="16.2" height="15.0" fill="rgb(83,230,83)" rx="2" ry="2" />
+<text text-anchor="" x="476.86" y="507.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>State::_sub_Op_ConL (1 samples, 0.69%)</title><rect x="140.2" y="545" width="8.1" height="15.0" fill="rgb(216,216,64)" rx="2" ry="2" />
+<text text-anchor="" x="143.21" y="555.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/fasterxml/jackson/databind/ser/impl/IndexedListSerializer:::serializeContents (1 samples, 0.69%)</title><rect x="766.8" y="513" width="8.2" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="769.83" y="523.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/fasterxml/jackson/databind/introspect/POJOPropertiesCollector:::collect (2 samples, 1.38%)</title><rect x="351.8" y="337" width="16.3" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="354.79" y="347.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>PhaseCCP::transform (1 samples, 0.69%)</title><rect x="189.0" y="673" width="8.2" height="15.0" fill="rgb(223,223,67)" rx="2" ry="2" />
+<text text-anchor="" x="192.03" y="683.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>JVM_DoPrivileged (1 samples, 0.69%)</title><rect x="433.2" y="353" width="8.1" height="15.0" fill="rgb(232,97,97)" rx="2" ry="2" />
+<text text-anchor="" x="436.17" y="363.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/fasterxml/jackson/databind/introspect/BasicClassIntrospector:::forSerialization (2 samples, 1.38%)</title><rect x="351.8" y="385" width="16.3" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="354.79" y="395.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lio/netty/channel/nio/NioEventLoop:::run (5 samples, 3.45%)</title><rect x="685.4" y="657" width="40.7" height="15.0" fill="rgb(87,233,87)" rx="2" ry="2" />
+<text text-anchor="" x="688.45" y="667.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Lio..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>ParseGenerator::generate (1 samples, 0.69%)</title><rect x="237.9" y="497" width="8.1" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="240.86" y="507.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Threads::nmethods_do (2 samples, 1.38%)</title><rect x="815.7" y="721" width="16.2" height="15.0" fill="rgb(211,211,63)" rx="2" ry="2" />
+<text text-anchor="" x="818.66" y="731.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Compile::get_alias_index (1 samples, 0.69%)</title><rect x="221.6" y="385" width="8.1" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="224.59" y="395.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Parse::do_put_xxx (1 samples, 0.69%)</title><rect x="237.9" y="209" width="8.1" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="240.86" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>SymbolTable::lookup (1 samples, 0.69%)</title><rect x="351.8" y="129" width="8.1" height="15.0" fill="rgb(223,223,67)" rx="2" ry="2" />
+<text text-anchor="" x="354.79" y="139.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>pthread_cond_signal@@GLIBC_2.3.2 (1 samples, 0.69%)</title><rect x="26.3" y="801" width="8.1" height="15.0" fill="rgb(91,237,91)" rx="2" ry="2" />
+<text text-anchor="" x="29.28" y="811.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/security/AccessController:::doPrivileged (1 samples, 0.69%)</title><rect x="335.5" y="513" width="8.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="338.52" y="523.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Type::Initialize (1 samples, 0.69%)</title><rect x="246.0" y="705" width="8.1" height="15.0" fill="rgb(219,219,66)" rx="2" ry="2" />
+<text text-anchor="" x="249.00" y="715.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>__pthread_mutex_unlock_usercnt (1 samples, 0.69%)</title><rect x="970.3" y="737" width="8.1" height="15.0" fill="rgb(233,99,99)" rx="2" ry="2" />
+<text text-anchor="" x="973.28" y="747.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/concurrent/ThreadPoolExecutor:::runWorker (9 samples, 6.21%)</title><rect x="726.1" y="657" width="73.3" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="729.14" y="667.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Ljava/ut..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>NMethodSweeper::mark_active_nmethods (2 samples, 1.38%)</title><rect x="815.7" y="737" width="16.2" height="15.0" fill="rgb(210,210,63)" rx="2" ry="2" />
+<text text-anchor="" x="818.66" y="747.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>InstanceKlass::find_method_index (1 samples, 0.69%)</title><rect x="612.2" y="353" width="8.1" height="15.0" fill="rgb(218,218,65)" rx="2" ry="2" />
+<text text-anchor="" x="615.21" y="363.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (67 samples, 46.21%)</title><rect x="254.1" y="673" width="545.3" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="257.14" y="683.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Interpreter</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Parse::do_call (1 samples, 0.69%)</title><rect x="237.9" y="417" width="8.1" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="240.86" y="427.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/lang/StringCoding:::encode (1 samples, 0.69%)</title><rect x="433.2" y="129" width="8.1" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="436.17" y="139.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lio/netty/util/concurrent/SingleThreadEventExecutor:::runAllTasks (2 samples, 1.38%)</title><rect x="709.9" y="641" width="16.2" height="15.0" fill="rgb(87,233,87)" rx="2" ry="2" />
+<text text-anchor="" x="712.86" y="651.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/codahale/metrics/MetricRegistry:::getGauges (2 samples, 1.38%)</title><rect x="457.6" y="561" width="16.3" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="460.59" y="571.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/net/URLClassLoader:::getResourceAsStream (5 samples, 3.45%)</title><rect x="408.8" y="481" width="40.6" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="411.76" y="491.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Lja..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>call_stub (1 samples, 0.69%)</title><rect x="433.2" y="321" width="8.1" height="15.0" fill="rgb(226,89,89)" rx="2" ry="2" />
+<text text-anchor="" x="436.17" y="331.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lsun/reflect/generics/tree/ClassTypeSignature:::accept (1 samples, 0.69%)</title><rect x="351.8" y="225" width="8.1" height="15.0" fill="rgb(83,230,83)" rx="2" ry="2" />
+<text text-anchor="" x="354.79" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>all (145 samples, 100%)</title><rect x="10.0" y="865" width="1180.0" height="15.0" fill="rgb(255,130,130)" rx="2" ry="2" />
+<text text-anchor="" x="13.00" y="875.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>BuildCutout::BuildCutout (1 samples, 0.69%)</title><rect x="213.4" y="497" width="8.2" height="15.0" fill="rgb(203,203,60)" rx="2" ry="2" />
+<text text-anchor="" x="216.45" y="507.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lsun/misc/Unsafe:::park (1 samples, 0.69%)</title><rect x="652.9" y="577" width="8.1" height="15.0" fill="rgb(83,230,83)" rx="2" ry="2" />
+<text text-anchor="" x="655.90" y="587.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/regex/Matcher:::replaceAll (3 samples, 2.07%)</title><rect x="506.4" y="513" width="24.4" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="509.41" y="523.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >L..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/jive/myco/commons/metrics/OpentsdbReporter$MetricsCollector:::addMetric (1 samples, 0.69%)</title><rect x="636.6" y="529" width="8.2" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="639.62" y="539.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/regex/Pattern$Branch:::match (1 samples, 0.69%)</title><rect x="783.1" y="513" width="8.1" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="786.10" y="523.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>dequeue_task_fair (1 samples, 0.69%)</title><rect x="50.7" y="785" width="8.1" height="15.0" fill="rgb(248,120,120)" rx="2" ry="2" />
+<text text-anchor="" x="53.69" y="795.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lio/netty/channel/nio/AbstractNioByteChannel$NioByteUnsafe:::read (1 samples, 0.69%)</title><rect x="701.7" y="625" width="8.2" height="15.0" fill="rgb(87,233,87)" rx="2" ry="2" />
+<text text-anchor="" x="704.72" y="635.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>JVM_GetAllThreads (1 samples, 0.69%)</title><rect x="498.3" y="465" width="8.1" height="15.0" fill="rgb(232,97,97)" rx="2" ry="2" />
+<text text-anchor="" x="501.28" y="475.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lsun/net/www/protocol/jar/JarURLConnection:::connect (2 samples, 1.38%)</title><rect x="433.2" y="449" width="16.2" height="15.0" fill="rgb(83,230,83)" rx="2" ry="2" />
+<text text-anchor="" x="436.17" y="459.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Parse::Parse (4 samples, 2.76%)</title><rect x="205.3" y="593" width="32.6" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="208.31" y="603.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Pa..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (3 samples, 2.07%)</title><rect x="286.7" y="641" width="24.4" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="289.69" y="651.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >I..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/Formatter:::format (1 samples, 0.69%)</title><rect x="327.4" y="497" width="8.1" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="330.38" y="507.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/fasterxml/jackson/databind/introspect/BasicClassIntrospector:::collectProperties (2 samples, 1.38%)</title><rect x="351.8" y="353" width="16.3" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="354.79" y="363.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>jmpDirNode::is_block_proj (1 samples, 0.69%)</title><rect x="180.9" y="673" width="8.1" height="15.0" fill="rgb(203,203,60)" rx="2" ry="2" />
+<text text-anchor="" x="183.90" y="683.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>pick_next_task_fair (1 samples, 0.69%)</title><rect x="83.2" y="753" width="8.2" height="15.0" fill="rgb(241,110,110)" rx="2" ry="2" />
+<text text-anchor="" x="86.24" y="763.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (1 samples, 0.69%)</title><rect x="343.7" y="513" width="8.1" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="346.66" y="523.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/jive/myco/commons/metrics/tagged/TaggedThreadStatesGaugeSet:::getThreadCount (2 samples, 1.38%)</title><rect x="620.3" y="513" width="16.3" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="623.34" y="523.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Parse::merge (1 samples, 0.69%)</title><rect x="229.7" y="529" width="8.2" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="232.72" y="539.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/zip/ZipFile:::getEntry (2 samples, 1.38%)</title><rect x="408.8" y="305" width="16.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="411.76" y="315.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/jive/myco/commons/metrics/Graphite:::writeBatch (2 samples, 1.38%)</title><rect x="327.4" y="545" width="16.3" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="330.38" y="555.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>CompactibleFreeListSpace::used (5 samples, 3.45%)</title><rect x="856.3" y="737" width="40.7" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="859.34" y="747.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Com..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/regex/Pattern$BmpCharProperty:::match (1 samples, 0.69%)</title><rect x="555.2" y="321" width="8.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="558.24" y="331.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/fasterxml/jackson/databind/ser/BeanPropertyWriter:::serializeAsField (2 samples, 1.38%)</title><rect x="376.2" y="417" width="16.3" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="379.21" y="427.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/jive/myco/commons/metrics/Graphite:::send (1 samples, 0.69%)</title><rect x="539.0" y="513" width="8.1" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="541.97" y="523.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>pthread_cond_timedwait@@GLIBC_2.3.2 (6 samples, 4.14%)</title><rect x="34.4" y="801" width="48.8" height="15.0" fill="rgb(91,237,91)" rx="2" ry="2" />
+<text text-anchor="" x="37.41" y="811.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >pthr..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>IndexSetIterator::advance_and_next (1 samples, 0.69%)</title><rect x="172.8" y="657" width="8.1" height="15.0" fill="rgb(221,221,66)" rx="2" ry="2" />
+<text text-anchor="" x="175.76" y="667.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>__schedule (1 samples, 0.69%)</title><rect x="1149.3" y="769" width="8.1" height="15.0" fill="rgb(231,95,95)" rx="2" ry="2" />
+<text text-anchor="" x="1152.31" y="779.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/Formatter:::format (1 samples, 0.69%)</title><rect x="783.1" y="561" width="8.1" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="786.10" y="571.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (1 samples, 0.69%)</title><rect x="758.7" y="593" width="8.1" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="761.69" y="603.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/jive/myco/commons/metrics/OpentsdbReporter:::buildTimers (1 samples, 0.69%)</title><rect x="636.6" y="545" width="8.2" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="639.62" y="555.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>JavaCalls::call_helper (68 samples, 46.90%)</title><rect x="254.1" y="721" width="553.4" height="15.0" fill="rgb(203,203,60)" rx="2" ry="2" />
+<text text-anchor="" x="257.14" y="731.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >JavaCalls::call_helper</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lorg/apache/http/util/VersionInfo:::loadVersionInfo (5 samples, 3.45%)</title><rect x="408.8" y="497" width="40.6" height="15.0" fill="rgb(91,237,91)" rx="2" ry="2" />
+<text text-anchor="" x="411.76" y="507.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Lor..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>pthread_mutex_lock (1 samples, 0.69%)</title><rect x="1116.8" y="737" width="8.1" height="15.0" fill="rgb(237,104,104)" rx="2" ry="2" />
+<text text-anchor="" x="1119.76" y="747.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/nio/charset/CharsetEncoder:::init (1 samples, 0.69%)</title><rect x="433.2" y="49" width="8.1" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="436.17" y="59.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Node::set_req (1 samples, 0.69%)</title><rect x="213.4" y="481" width="8.2" height="15.0" fill="rgb(210,210,62)" rx="2" ry="2" />
+<text text-anchor="" x="216.45" y="491.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>kvm_clock_read (1 samples, 0.69%)</title><rect x="67.0" y="785" width="8.1" height="15.0" fill="rgb(231,95,95)" rx="2" ry="2" />
+<text text-anchor="" x="69.97" y="795.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>pthread_cond_timedwait@@GLIBC_2.3.2 (2 samples, 1.38%)</title><rect x="1149.3" y="785" width="16.3" height="15.0" fill="rgb(91,237,91)" rx="2" ry="2" />
+<text text-anchor="" x="1152.31" y="795.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Parse::array_addressing (1 samples, 0.69%)</title><rect x="213.4" y="513" width="8.2" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="216.45" y="523.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>call_stub (1 samples, 0.69%)</title><rect x="433.2" y="161" width="8.1" height="15.0" fill="rgb(226,89,89)" rx="2" ry="2" />
+<text text-anchor="" x="436.17" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/jive/myco/commons/metrics/Graphite:::writeTextBatch (3 samples, 2.07%)</title><rect x="734.3" y="593" width="24.4" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="737.28" y="603.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >L..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/codahale/metrics/JmxAttributeGauge:::getValue (1 samples, 0.69%)</title><rect x="595.9" y="529" width="8.2" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="598.93" y="539.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>SafepointSynchronize::begin (2 samples, 1.38%)</title><rect x="815.7" y="769" width="16.2" height="15.0" fill="rgb(208,208,62)" rx="2" ry="2" />
+<text text-anchor="" x="818.66" y="779.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Monitor::IWait (1 samples, 0.69%)</title><rect x="807.5" y="753" width="8.2" height="15.0" fill="rgb(213,213,64)" rx="2" ry="2" />
+<text text-anchor="" x="810.52" y="763.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/regex/Pattern$Ctype:::isSatisfiedBy (1 samples, 0.69%)</title><rect x="539.0" y="433" width="8.1" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="541.97" y="443.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/regex/Pattern$GroupHead:::match (1 samples, 0.69%)</title><rect x="783.1" y="497" width="8.1" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="786.10" y="507.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (7 samples, 4.83%)</title><rect x="351.8" y="513" width="57.0" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="354.79" y="523.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Interp..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>get_futex_key (1 samples, 0.69%)</title><rect x="937.7" y="721" width="8.2" height="15.0" fill="rgb(240,109,109)" rx="2" ry="2" />
+<text text-anchor="" x="940.72" y="731.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>ParseGenerator::generate (4 samples, 2.76%)</title><rect x="205.3" y="609" width="32.6" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="208.31" y="619.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Pa..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>pthread_cond_timedwait@@GLIBC_2.3.2 (1 samples, 0.69%)</title><rect x="1181.9" y="801" width="8.1" height="15.0" fill="rgb(91,237,91)" rx="2" ry="2" />
+<text text-anchor="" x="1184.86" y="811.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>update_blocked_averages (1 samples, 0.69%)</title><rect x="1157.4" y="769" width="8.2" height="15.0" fill="rgb(236,102,102)" rx="2" ry="2" />
+<text text-anchor="" x="1160.45" y="779.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (1 samples, 0.69%)</title><rect x="433.2" y="65" width="8.1" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="436.17" y="75.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>call_stub (1 samples, 0.69%)</title><rect x="791.2" y="449" width="8.2" height="15.0" fill="rgb(226,89,89)" rx="2" ry="2" />
+<text text-anchor="" x="794.24" y="459.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lsun/nio/ch/EPollArrayWrapper:::epollWait (3 samples, 2.07%)</title><rect x="286.7" y="593" width="24.4" height="15.0" fill="rgb(83,230,83)" rx="2" ry="2" />
+<text text-anchor="" x="289.69" y="603.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >L..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/WeakHashMap:::getEntry (1 samples, 0.69%)</title><rect x="425.0" y="465" width="8.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="428.03" y="475.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>call_stub (2 samples, 1.38%)</title><rect x="408.8" y="385" width="16.2" height="15.0" fill="rgb(226,89,89)" rx="2" ry="2" />
+<text text-anchor="" x="411.76" y="395.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>PhaseIterGVN::optimize (1 samples, 0.69%)</title><rect x="197.2" y="673" width="8.1" height="15.0" fill="rgb(223,223,67)" rx="2" ry="2" />
+<text text-anchor="" x="200.17" y="683.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (1 samples, 0.69%)</title><rect x="343.7" y="497" width="8.1" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="346.66" y="507.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Type::uhash (1 samples, 0.69%)</title><rect x="246.0" y="689" width="8.1" height="15.0" fill="rgb(219,219,66)" rx="2" ry="2" />
+<text text-anchor="" x="249.00" y="699.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/lang/ClassLoader:::getResource (2 samples, 1.38%)</title><rect x="408.8" y="465" width="16.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="411.76" y="475.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/jive/myco/commons/metrics/AsyncAppender$$Lambda$411/429066976:::run (8 samples, 5.52%)</title><rect x="734.3" y="625" width="65.1" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="737.28" y="635.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Lcom/ji..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/regex/Pattern$BmpCharProperty:::match (1 samples, 0.69%)</title><rect x="506.4" y="481" width="8.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="509.41" y="491.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>ThreadsListEnumerator::ThreadsListEnumerator (1 samples, 0.69%)</title><rect x="498.3" y="449" width="8.1" height="15.0" fill="rgb(211,211,63)" rx="2" ry="2" />
+<text text-anchor="" x="501.28" y="459.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>account_entity_dequeue (1 samples, 0.69%)</title><rect x="42.6" y="785" width="8.1" height="15.0" fill="rgb(239,107,107)" rx="2" ry="2" />
+<text text-anchor="" x="45.55" y="795.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/regex/Pattern$GroupHead:::match (1 samples, 0.69%)</title><rect x="555.2" y="401" width="8.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="558.24" y="411.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Parse::do_call (1 samples, 0.69%)</title><rect x="237.9" y="513" width="8.1" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="240.86" y="523.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/jive/myco/commons/metrics/Graphite:::writeBatch (3 samples, 2.07%)</title><rect x="734.3" y="609" width="24.4" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="737.28" y="619.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >L..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Matcher::match_tree (1 samples, 0.69%)</title><rect x="140.2" y="657" width="8.1" height="15.0" fill="rgb(199,199,58)" rx="2" ry="2" />
+<text text-anchor="" x="143.21" y="667.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (1 samples, 0.69%)</title><rect x="343.7" y="433" width="8.1" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="346.66" y="443.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>StackFrameStream::StackFrameStream (1 samples, 0.69%)</title><rect x="815.7" y="689" width="8.1" height="15.0" fill="rgb(216,216,64)" rx="2" ry="2" />
+<text text-anchor="" x="818.66" y="699.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/regex/Pattern$Branch:::match (1 samples, 0.69%)</title><rect x="555.2" y="273" width="8.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="558.24" y="283.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lorg/apache/http/util/VersionInfo:::getUserAgent (2 samples, 1.38%)</title><rect x="783.1" y="577" width="16.3" height="15.0" fill="rgb(91,237,91)" rx="2" ry="2" />
+<text text-anchor="" x="786.10" y="587.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>ParseGenerator::generate (1 samples, 0.69%)</title><rect x="221.6" y="513" width="8.1" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="224.59" y="523.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>JavaCalls::call_special (1 samples, 0.69%)</title><rect x="482.0" y="433" width="8.1" height="15.0" fill="rgb(203,203,60)" rx="2" ry="2" />
+<text text-anchor="" x="485.00" y="443.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/fasterxml/jackson/databind/ser/BeanSerializerFactory:::createSerializer (3 samples, 2.07%)</title><rect x="351.8" y="401" width="24.4" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="354.79" y="411.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >L..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/fasterxml/jackson/databind/SerializerProvider:::_createAndCacheUntypedSerializer (3 samples, 2.07%)</title><rect x="351.8" y="417" width="24.4" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="354.79" y="427.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >L..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/fasterxml/jackson/databind/ObjectMapper:::writeValueAsString (7 samples, 4.83%)</title><rect x="351.8" y="529" width="57.0" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="354.79" y="539.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Lcom/f..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (1 samples, 0.69%)</title><rect x="343.7" y="401" width="8.1" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="346.66" y="411.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>JavaCalls::call_helper (1 samples, 0.69%)</title><rect x="433.2" y="177" width="8.1" height="15.0" fill="rgb(203,203,60)" rx="2" ry="2" />
+<text text-anchor="" x="436.17" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/Formatter:::format (1 samples, 0.69%)</title><rect x="384.3" y="369" width="8.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="387.34" y="379.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/codahale/metrics/UniformSnapshot:::init (1 samples, 0.69%)</title><rect x="726.1" y="545" width="8.2" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="729.14" y="555.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/regex/Pattern$Curly:::match (2 samples, 1.38%)</title><rect x="742.4" y="545" width="16.3" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="745.41" y="555.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/codahale/metrics/graphite/GraphiteReporter:::report (13 samples, 8.97%)</title><rect x="473.9" y="561" width="105.8" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="476.86" y="571.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Lcom/codahal..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (1 samples, 0.69%)</title><rect x="766.8" y="561" width="8.2" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="769.83" y="571.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Matcher::Label_Root (1 samples, 0.69%)</title><rect x="140.2" y="641" width="8.1" height="15.0" fill="rgb(199,199,58)" rx="2" ry="2" />
+<text text-anchor="" x="143.21" y="651.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/Formatter$FormatSpecifier:::init (1 samples, 0.69%)</title><rect x="530.8" y="513" width="8.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="533.83" y="523.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/fasterxml/jackson/databind/ser/BeanSerializerFactory:::_createSerializer2 (1 samples, 0.69%)</title><rect x="392.5" y="417" width="8.1" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="395.48" y="427.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Parse::do_one_bytecode (5 samples, 3.45%)</title><rect x="205.3" y="641" width="40.7" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="208.31" y="651.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Par..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/net/URLClassLoader:::findResource (1 samples, 0.69%)</title><rect x="791.2" y="513" width="8.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="794.24" y="523.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/concurrent/Executors$RunnableAdapter:::call (24 samples, 16.55%)</title><rect x="449.4" y="609" width="195.4" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="452.45" y="619.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Ljava/util/concurrent/Exe..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/concurrent/ThreadPoolExecutor:::getTask (2 samples, 1.38%)</title><rect x="644.8" y="641" width="16.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="647.76" y="651.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (7 samples, 4.83%)</title><rect x="351.8" y="481" width="57.0" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="354.79" y="491.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Interp..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Parse::Parse (5 samples, 3.45%)</title><rect x="205.3" y="689" width="40.7" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="208.31" y="699.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Par..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>JavaCalls::call_helper (1 samples, 0.69%)</title><rect x="335.5" y="481" width="8.2" height="15.0" fill="rgb(203,203,60)" rx="2" ry="2" />
+<text text-anchor="" x="338.52" y="491.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>call_stub (68 samples, 46.90%)</title><rect x="254.1" y="705" width="553.4" height="15.0" fill="rgb(226,89,89)" rx="2" ry="2" />
+<text text-anchor="" x="257.14" y="715.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >call_stub</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>__lll_unlock_wake (1 samples, 0.69%)</title><rect x="937.7" y="737" width="8.2" height="15.0" fill="rgb(236,103,103)" rx="2" ry="2" />
+<text text-anchor="" x="940.72" y="747.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>WatcherThread::sleep (30 samples, 20.69%)</title><rect x="905.2" y="785" width="244.1" height="15.0" fill="rgb(199,199,58)" rx="2" ry="2" />
+<text text-anchor="" x="908.17" y="795.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >WatcherThread::sleep</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/TreeMap:::put (2 samples, 1.38%)</title><rect x="457.6" y="529" width="16.3" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="460.59" y="539.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/regex/Pattern$BranchConn:::match (1 samples, 0.69%)</title><rect x="555.2" y="369" width="8.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="558.24" y="379.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>SyS_epoll_wait (1 samples, 0.69%)</title><rect x="661.0" y="625" width="8.2" height="15.0" fill="rgb(240,109,109)" rx="2" ry="2" />
+<text text-anchor="" x="664.03" y="635.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lsun/nio/ch/SelectorImpl:::select (3 samples, 2.07%)</title><rect x="286.7" y="625" width="24.4" height="15.0" fill="rgb(83,230,83)" rx="2" ry="2" />
+<text text-anchor="" x="289.69" y="635.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >L..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (1 samples, 0.69%)</title><rect x="368.1" y="353" width="8.1" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="371.07" y="363.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Parse::do_call (5 samples, 3.45%)</title><rect x="205.3" y="625" width="40.7" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="208.31" y="635.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Par..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>JavaThread::thread_main_inner (82 samples, 56.55%)</title><rect x="140.2" y="785" width="667.3" height="15.0" fill="rgb(203,203,60)" rx="2" ry="2" />
+<text text-anchor="" x="143.21" y="795.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >JavaThread::thread_main_inner</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/regex/Pattern$BmpCharProperty:::match (1 samples, 0.69%)</title><rect x="555.2" y="513" width="8.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="558.24" y="523.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>schedule (1 samples, 0.69%)</title><rect x="1092.3" y="721" width="8.2" height="15.0" fill="rgb(239,107,107)" rx="2" ry="2" />
+<text text-anchor="" x="1095.34" y="731.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>epoll_wait (2 samples, 1.38%)</title><rect x="294.8" y="577" width="16.3" height="15.0" fill="rgb(248,120,120)" rx="2" ry="2" />
+<text text-anchor="" x="297.83" y="587.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/jive/myco/commons/metrics/OpentsdbReporter:::report (8 samples, 5.52%)</title><rect x="579.7" y="561" width="65.1" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="582.66" y="571.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Lcom/ji..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (2 samples, 1.38%)</title><rect x="473.9" y="529" width="16.2" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="476.86" y="539.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/lang/Enum:::compareTo (1 samples, 0.69%)</title><rect x="319.2" y="641" width="8.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="322.24" y="651.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (1 samples, 0.69%)</title><rect x="587.8" y="513" width="8.1" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="590.79" y="523.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/codahale/metrics/jvm/ThreadStatesGaugeSet$1:::getValue (1 samples, 0.69%)</title><rect x="498.3" y="529" width="8.1" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="501.28" y="539.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/jive/myco/commons/metrics/Graphite:::writeTextBatch (2 samples, 1.38%)</title><rect x="327.4" y="529" width="16.3" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="330.38" y="539.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>ThreadSnapshot::ThreadSnapshot (1 samples, 0.69%)</title><rect x="628.5" y="449" width="8.1" height="15.0" fill="rgb(211,211,63)" rx="2" ry="2" />
+<text text-anchor="" x="631.48" y="459.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/jive/v5/isp/core/transport/tcp/handlers/MdcHandler:::channelRead (1 samples, 0.69%)</title><rect x="701.7" y="561" width="8.2" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="704.72" y="571.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/lang/ClassLoader:::getResource (1 samples, 0.69%)</title><rect x="791.2" y="529" width="8.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="794.24" y="539.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (2 samples, 1.38%)</title><rect x="473.9" y="513" width="16.2" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="476.86" y="523.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (1 samples, 0.69%)</title><rect x="433.2" y="257" width="8.1" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="436.17" y="267.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/regex/Matcher:::find (1 samples, 0.69%)</title><rect x="539.0" y="481" width="8.1" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="541.97" y="491.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>JavaCalls::call_special (1 samples, 0.69%)</title><rect x="612.2" y="449" width="8.1" height="15.0" fill="rgb(203,203,60)" rx="2" ry="2" />
+<text text-anchor="" x="615.21" y="459.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (1 samples, 0.69%)</title><rect x="311.1" y="609" width="8.1" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="314.10" y="619.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/fasterxml/jackson/databind/ser/BeanSerializerFactory:::_createSerializer2 (1 samples, 0.69%)</title><rect x="368.1" y="385" width="8.1" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="371.07" y="395.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/sun/jmx/mbeanserver/JmxMBeanServer:::getAttribute (1 samples, 0.69%)</title><rect x="595.9" y="513" width="8.2" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="598.93" y="523.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (15 samples, 10.34%)</title><rect x="327.4" y="577" width="122.0" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="330.38" y="587.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Interpreter</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_raw_spin_lock (1 samples, 0.69%)</title><rect x="26.3" y="785" width="8.1" height="15.0" fill="rgb(239,107,107)" rx="2" ry="2" />
+<text text-anchor="" x="29.28" y="795.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>JavaCalls::call_helper (1 samples, 0.69%)</title><rect x="482.0" y="417" width="8.1" height="15.0" fill="rgb(203,203,60)" rx="2" ry="2" />
+<text text-anchor="" x="485.00" y="427.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/io/UnixFileSystem:::canonicalize (1 samples, 0.69%)</title><rect x="433.2" y="273" width="8.1" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="436.17" y="283.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (1 samples, 0.69%)</title><rect x="449.4" y="561" width="8.2" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="452.45" y="571.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>update_blocked_averages (1 samples, 0.69%)</title><rect x="1108.6" y="721" width="8.2" height="15.0" fill="rgb(236,102,102)" rx="2" ry="2" />
+<text text-anchor="" x="1111.62" y="731.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Matcher::xform (1 samples, 0.69%)</title><rect x="140.2" y="673" width="8.1" height="15.0" fill="rgb(199,199,58)" rx="2" ry="2" />
+<text text-anchor="" x="143.21" y="683.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Parse::do_one_bytecode (1 samples, 0.69%)</title><rect x="237.9" y="337" width="8.1" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="240.86" y="347.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (1 samples, 0.69%)</title><rect x="726.1" y="561" width="8.2" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="729.14" y="571.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>ParseGenerator::generate (1 samples, 0.69%)</title><rect x="237.9" y="401" width="8.1" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="240.86" y="411.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>GraphKit::add_predicate (1 samples, 0.69%)</title><rect x="205.3" y="561" width="8.1" height="15.0" fill="rgb(222,222,67)" rx="2" ry="2" />
+<text text-anchor="" x="208.31" y="571.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>PhaseCCP::do_transform (1 samples, 0.69%)</title><rect x="189.0" y="689" width="8.2" height="15.0" fill="rgb(223,223,67)" rx="2" ry="2" />
+<text text-anchor="" x="192.03" y="699.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (1 samples, 0.69%)</title><rect x="343.7" y="481" width="8.1" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="346.66" y="491.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/fasterxml/jackson/databind/ser/BeanSerializer:::serialize (2 samples, 1.38%)</title><rect x="376.2" y="433" width="16.3" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="379.21" y="443.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lsun/management/MemoryPoolImpl:::getUsage0 (1 samples, 0.69%)</title><rect x="612.2" y="513" width="8.1" height="15.0" fill="rgb(83,230,83)" rx="2" ry="2" />
+<text text-anchor="" x="615.21" y="523.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lsun/management/ThreadImpl:::getThreads (1 samples, 0.69%)</title><rect x="498.3" y="481" width="8.1" height="15.0" fill="rgb(83,230,83)" rx="2" ry="2" />
+<text text-anchor="" x="501.28" y="491.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Parse::Parse (1 samples, 0.69%)</title><rect x="237.9" y="289" width="8.1" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="240.86" y="299.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>GraphKit::write_barrier_post (1 samples, 0.69%)</title><rect x="237.9" y="177" width="8.1" height="15.0" fill="rgb(222,222,67)" rx="2" ry="2" />
+<text text-anchor="" x="240.86" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Parse::do_all_blocks (1 samples, 0.69%)</title><rect x="237.9" y="561" width="8.1" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="240.86" y="571.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/regex/Pattern$BranchConn:::match (1 samples, 0.69%)</title><rect x="555.2" y="433" width="8.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="558.24" y="443.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Parse::array_load (1 samples, 0.69%)</title><rect x="213.4" y="529" width="8.2" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="216.45" y="539.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/concurrent/ScheduledThreadPoolExecutor$DelayedWorkQueue:::take (2 samples, 1.38%)</title><rect x="644.8" y="609" width="16.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="647.76" y="619.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/concurrent/FutureTask:::run (15 samples, 10.34%)</title><rect x="327.4" y="625" width="122.0" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="330.38" y="635.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Ljava/util/conc..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>JavaCalls::call_helper (1 samples, 0.69%)</title><rect x="791.2" y="465" width="8.2" height="15.0" fill="rgb(203,203,60)" rx="2" ry="2" />
+<text text-anchor="" x="794.24" y="475.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (51 samples, 35.17%)</title><rect x="270.4" y="657" width="415.0" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="273.41" y="667.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Interpreter</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Parse::do_one_block (1 samples, 0.69%)</title><rect x="237.9" y="257" width="8.1" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="240.86" y="267.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lsun/reflect/generics/tree/ClassTypeSignature:::accept (1 samples, 0.69%)</title><rect x="351.8" y="273" width="8.1" height="15.0" fill="rgb(83,230,83)" rx="2" ry="2" />
+<text text-anchor="" x="354.79" y="283.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/jive/myco/commons/metrics/AsyncAppender:::append (1 samples, 0.69%)</title><rect x="579.7" y="529" width="8.1" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="582.66" y="539.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/regex/Pattern$Branch:::match (1 samples, 0.69%)</title><rect x="555.2" y="497" width="8.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="558.24" y="507.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lsun/net/www/protocol/file/Handler:::openConnection (1 samples, 0.69%)</title><rect x="441.3" y="401" width="8.1" height="15.0" fill="rgb(83,230,83)" rx="2" ry="2" />
+<text text-anchor="" x="444.31" y="411.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/fasterxml/jackson/databind/SerializerProvider:::_createAndCacheUntypedSerializer (1 samples, 0.69%)</title><rect x="392.5" y="449" width="8.1" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="395.48" y="459.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>CodeHeap::find_start (1 samples, 0.69%)</title><rect x="815.7" y="657" width="8.1" height="15.0" fill="rgb(212,212,63)" rx="2" ry="2" />
+<text text-anchor="" x="818.66" y="667.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Parse::Parse (1 samples, 0.69%)</title><rect x="237.9" y="577" width="8.1" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="240.86" y="587.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>CompactibleFreeListSpace::free (1 samples, 0.69%)</title><rect x="473.9" y="417" width="8.1" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="476.86" y="427.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>java_start (129 samples, 88.97%)</title><rect x="140.2" y="817" width="1049.8" height="15.0" fill="rgb(224,86,86)" rx="2" ry="2" />
+<text text-anchor="" x="143.21" y="827.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >java_start</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>PredictedCallGenerator::generate (1 samples, 0.69%)</title><rect x="237.9" y="609" width="8.1" height="15.0" fill="rgb(221,221,66)" rx="2" ry="2" />
+<text text-anchor="" x="240.86" y="619.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/sun/jmx/mbeanserver/ConvertingMethod:::invokeWithOpenReturn (1 samples, 0.69%)</title><rect x="490.1" y="401" width="8.2" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="493.14" y="411.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>StatSamplerTask::task (8 samples, 5.52%)</title><rect x="831.9" y="769" width="65.1" height="15.0" fill="rgb(216,216,64)" rx="2" ry="2" />
+<text text-anchor="" x="834.93" y="779.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >StatSam..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/zip/ZipFile:::getEntry (1 samples, 0.69%)</title><rect x="791.2" y="369" width="8.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="794.24" y="379.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>JVM_FindClassFromCaller (1 samples, 0.69%)</title><rect x="351.8" y="145" width="8.1" height="15.0" fill="rgb(232,97,97)" rx="2" ry="2" />
+<text text-anchor="" x="354.79" y="155.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lsun/net/www/protocol/jar/JarFileFactory:::getCachedJarFile (1 samples, 0.69%)</title><rect x="433.2" y="417" width="8.1" height="15.0" fill="rgb(83,230,83)" rx="2" ry="2" />
+<text text-anchor="" x="436.17" y="427.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lio/netty/channel/nio/NioEventLoop:::processSelectedKey (1 samples, 0.69%)</title><rect x="701.7" y="641" width="8.2" height="15.0" fill="rgb(87,233,87)" rx="2" ry="2" />
+<text text-anchor="" x="704.72" y="651.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/sun/jmx/interceptor/DefaultMBeanServerInterceptor:::getAttribute (1 samples, 0.69%)</title><rect x="490.1" y="497" width="8.2" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="493.14" y="507.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>clock_gettime (3 samples, 2.07%)</title><rect x="99.5" y="817" width="24.4" height="15.0" fill="rgb(224,85,85)" rx="2" ry="2" />
+<text text-anchor="" x="102.52" y="827.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >c..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/jive/myco/commons/metrics/Graphite:::send (3 samples, 2.07%)</title><rect x="506.4" y="529" width="24.4" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="509.41" y="539.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >L..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/codahale/metrics/JmxAttributeGauge:::getValue (1 samples, 0.69%)</title><rect x="490.1" y="529" width="8.2" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="493.14" y="539.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/concurrent/Executors$RunnableAdapter:::call (15 samples, 10.34%)</title><rect x="327.4" y="609" width="122.0" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="330.38" y="619.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Ljava/util/conc..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/lang/String:::format (1 samples, 0.69%)</title><rect x="384.3" y="385" width="8.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="387.34" y="395.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/regex/Matcher:::replaceAll (1 samples, 0.69%)</title><rect x="539.0" y="497" width="8.1" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="541.97" y="507.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Java_java_lang_Class_forName0 (1 samples, 0.69%)</title><rect x="351.8" y="161" width="8.1" height="15.0" fill="rgb(228,91,91)" rx="2" ry="2" />
+<text text-anchor="" x="354.79" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>CompactibleFreeListSpace::used (1 samples, 0.69%)</title><rect x="473.9" y="433" width="8.1" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="476.86" y="443.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/jive/myco/commons/metrics/tagged/TaggedMemoryUsageGaugeSet$18:::getValue (1 samples, 0.69%)</title><rect x="612.2" y="529" width="8.1" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="615.21" y="539.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>jmm_GetThreadInfo (2 samples, 1.38%)</title><rect x="620.3" y="465" width="16.3" height="15.0" fill="rgb(230,94,94)" rx="2" ry="2" />
+<text text-anchor="" x="623.34" y="475.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/regex/Pattern$BranchConn:::match (1 samples, 0.69%)</title><rect x="555.2" y="289" width="8.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="558.24" y="299.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>PhaseChaitin::interfere_with_live (1 samples, 0.69%)</title><rect x="156.5" y="657" width="8.1" height="15.0" fill="rgb(223,223,67)" rx="2" ry="2" />
+<text text-anchor="" x="159.48" y="667.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lio/netty/channel/DefaultChannelHandlerContext:::fireChannelRead (1 samples, 0.69%)</title><rect x="701.7" y="577" width="8.2" height="15.0" fill="rgb(87,233,87)" rx="2" ry="2" />
+<text text-anchor="" x="704.72" y="587.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>PhiNode::Value (1 samples, 0.69%)</title><rect x="197.2" y="641" width="8.1" height="15.0" fill="rgb(217,217,65)" rx="2" ry="2" />
+<text text-anchor="" x="200.17" y="651.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>set_normalized_timespec (1 samples, 0.69%)</title><rect x="677.3" y="625" width="8.1" height="15.0" fill="rgb(236,103,103)" rx="2" ry="2" />
+<text text-anchor="" x="680.31" y="635.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>start_thread (129 samples, 88.97%)</title><rect x="140.2" y="833" width="1049.8" height="15.0" fill="rgb(237,104,104)" rx="2" ry="2" />
+<text text-anchor="" x="143.21" y="843.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >start_thread</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>do_futex (1 samples, 0.69%)</title><rect x="1051.7" y="721" width="8.1" height="15.0" fill="rgb(245,115,115)" rx="2" ry="2" />
+<text text-anchor="" x="1054.66" y="731.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/codahale/metrics/jvm/ThreadStatesGaugeSet:::getThreadCount (1 samples, 0.69%)</title><rect x="498.3" y="513" width="8.1" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="501.28" y="523.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>CompactibleFreeListSpacePool::get_memory_usage (1 samples, 0.69%)</title><rect x="473.9" y="449" width="8.1" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="476.86" y="459.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lsun/nio/ch/SelectorImpl:::lockAndDoSelect (3 samples, 2.07%)</title><rect x="286.7" y="609" width="24.4" height="15.0" fill="rgb(83,230,83)" rx="2" ry="2" />
+<text text-anchor="" x="289.69" y="619.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >L..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>CompileBroker::invoke_compiler_on_method (14 samples, 9.66%)</title><rect x="140.2" y="753" width="113.9" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="143.21" y="763.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >CompileBroker:..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/Formatter:::format (2 samples, 1.38%)</title><rect x="547.1" y="529" width="16.3" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="550.10" y="539.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>thread_entry (68 samples, 46.90%)</title><rect x="254.1" y="769" width="553.4" height="15.0" fill="rgb(232,97,97)" rx="2" ry="2" />
+<text text-anchor="" x="257.14" y="779.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >thread_entry</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>I2C/C2I adapters (2 samples, 1.38%)</title><rect x="254.1" y="657" width="16.3" height="15.0" fill="rgb(89,236,89)" rx="2" ry="2" />
+<text text-anchor="" x="257.14" y="667.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>__lll_unlock_wake (1 samples, 0.69%)</title><rect x="115.8" y="801" width="8.1" height="15.0" fill="rgb(236,103,103)" rx="2" ry="2" />
+<text text-anchor="" x="118.79" y="811.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>JavaThread::run (82 samples, 56.55%)</title><rect x="140.2" y="801" width="667.3" height="15.0" fill="rgb(203,203,60)" rx="2" ry="2" />
+<text text-anchor="" x="143.21" y="811.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >JavaThread::run</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/jive/myco/commons/metrics/Opentsdb:::handleEventOrBatchTimeout (13 samples, 8.97%)</title><rect x="343.7" y="561" width="105.7" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="346.66" y="571.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Lcom/jive/my..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/sun/jmx/mbeanserver/ConvertingMethod:::invokeWithOpenReturn (1 samples, 0.69%)</title><rect x="490.1" y="417" width="8.2" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="493.14" y="427.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>IndexSetIterator::advance_and_next (1 samples, 0.69%)</title><rect x="156.5" y="641" width="8.1" height="15.0" fill="rgb(221,221,66)" rx="2" ry="2" />
+<text text-anchor="" x="159.48" y="651.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Matcher::Label_Root (1 samples, 0.69%)</title><rect x="140.2" y="625" width="8.1" height="15.0" fill="rgb(199,199,58)" rx="2" ry="2" />
+<text text-anchor="" x="143.21" y="635.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (1 samples, 0.69%)</title><rect x="433.2" y="81" width="8.1" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="436.17" y="91.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/zip/ZipFile:::getEntry (1 samples, 0.69%)</title><rect x="791.2" y="385" width="8.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="794.24" y="395.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Java_java_io_UnixFileSystem_canonicalize0 (1 samples, 0.69%)</title><rect x="433.2" y="241" width="8.1" height="15.0" fill="rgb(228,91,91)" rx="2" ry="2" />
+<text text-anchor="" x="436.17" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/stream/AbstractPipeline:::evaluate (1 samples, 0.69%)</title><rect x="449.4" y="545" width="8.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="452.45" y="555.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/regex/Pattern$Curly:::match (1 samples, 0.69%)</title><rect x="555.2" y="385" width="8.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="558.24" y="395.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>SyS_futex (1 samples, 0.69%)</title><rect x="1035.4" y="721" width="8.1" height="15.0" fill="rgb(240,109,109)" rx="2" ry="2" />
+<text text-anchor="" x="1038.38" y="731.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/DualPivotQuicksort:::sort (1 samples, 0.69%)</title><rect x="726.1" y="513" width="8.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="729.14" y="523.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (1 samples, 0.69%)</title><rect x="726.1" y="593" width="8.2" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="729.14" y="603.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>NodeHash::hash_find_insert (1 samples, 0.69%)</title><rect x="237.9" y="145" width="8.1" height="15.0" fill="rgb(210,210,62)" rx="2" ry="2" />
+<text text-anchor="" x="240.86" y="155.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>JVM_DoPrivileged (2 samples, 1.38%)</title><rect x="408.8" y="417" width="16.2" height="15.0" fill="rgb(232,97,97)" rx="2" ry="2" />
+<text text-anchor="" x="411.76" y="427.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/regex/Pattern$GroupHead:::match (1 samples, 0.69%)</title><rect x="555.2" y="337" width="8.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="558.24" y="347.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/lang/StringCoding:::encode (1 samples, 0.69%)</title><rect x="775.0" y="593" width="8.1" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="777.97" y="603.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/fasterxml/jackson/databind/ser/std/MapSerializer:::serializeFieldsUsing (1 samples, 0.69%)</title><rect x="766.8" y="449" width="8.2" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="769.83" y="459.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>timerqueue_add (1 samples, 0.69%)</title><rect x="1100.5" y="721" width="8.1" height="15.0" fill="rgb(235,101,101)" rx="2" ry="2" />
+<text text-anchor="" x="1103.48" y="731.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/io/FilePermission$1:::run (1 samples, 0.69%)</title><rect x="433.2" y="305" width="8.1" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="436.17" y="315.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Parse::Parse (1 samples, 0.69%)</title><rect x="237.9" y="481" width="8.1" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="240.86" y="491.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Parse::do_one_block (1 samples, 0.69%)</title><rect x="237.9" y="449" width="8.1" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="240.86" y="459.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>WatcherThread::run (41 samples, 28.28%)</title><rect x="831.9" y="801" width="333.7" height="15.0" fill="rgb(199,199,58)" rx="2" ry="2" />
+<text text-anchor="" x="834.93" y="811.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >WatcherThread::run</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Parse::do_call (1 samples, 0.69%)</title><rect x="237.9" y="321" width="8.1" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="240.86" y="331.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/fasterxml/jackson/databind/ObjectMapper:::writeValueAsString (1 samples, 0.69%)</title><rect x="766.8" y="593" width="8.2" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="769.83" y="603.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/fasterxml/jackson/databind/ser/BeanSerializerFactory:::createSerializer (1 samples, 0.69%)</title><rect x="392.5" y="433" width="8.1" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="395.48" y="443.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/regex/Matcher:::find (3 samples, 2.07%)</title><rect x="506.4" y="497" width="24.4" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="509.41" y="507.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >L..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (1 samples, 0.69%)</title><rect x="587.8" y="529" width="8.1" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="590.79" y="539.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (1 samples, 0.69%)</title><rect x="343.7" y="529" width="8.1" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="346.66" y="539.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/regex/Pattern$GroupHead:::match (1 samples, 0.69%)</title><rect x="555.2" y="465" width="8.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="558.24" y="475.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>__pthread_disable_asynccancel (3 samples, 2.07%)</title><rect x="945.9" y="737" width="24.4" height="15.0" fill="rgb(233,99,99)" rx="2" ry="2" />
+<text text-anchor="" x="948.86" y="747.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >_..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/jive/myco/commons/concurrent/Pnky:::lambda$supplyAsync$9 (1 samples, 0.69%)</title><rect x="311.1" y="625" width="8.1" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="314.10" y="635.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>LinkResolver::lookup_method_in_klasses (1 samples, 0.69%)</title><rect x="612.2" y="385" width="8.1" height="15.0" fill="rgb(209,209,62)" rx="2" ry="2" />
+<text text-anchor="" x="615.21" y="395.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/DualPivotQuicksort:::sort (1 samples, 0.69%)</title><rect x="726.1" y="497" width="8.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="729.14" y="507.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Compile::find_alias_type (1 samples, 0.69%)</title><rect x="221.6" y="369" width="8.1" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="224.59" y="379.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Parse::do_one_block (1 samples, 0.69%)</title><rect x="237.9" y="353" width="8.1" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="240.86" y="363.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lio/netty/util/concurrent/ScheduledFutureTask:::run (1 samples, 0.69%)</title><rect x="709.9" y="625" width="8.1" height="15.0" fill="rgb(87,233,87)" rx="2" ry="2" />
+<text text-anchor="" x="712.86" y="635.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (1 samples, 0.69%)</title><rect x="766.8" y="545" width="8.2" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="769.83" y="555.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (1 samples, 0.69%)</title><rect x="766.8" y="529" width="8.2" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="769.83" y="539.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/regex/Pattern$BmpCharProperty:::match (1 samples, 0.69%)</title><rect x="783.1" y="545" width="8.1" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="786.10" y="555.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>GraphKit::store_oop (1 samples, 0.69%)</title><rect x="237.9" y="193" width="8.1" height="15.0" fill="rgb(222,222,67)" rx="2" ry="2" />
+<text text-anchor="" x="240.86" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (1 samples, 0.69%)</title><rect x="766.8" y="577" width="8.2" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="769.83" y="587.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/regex/Pattern$BmpCharProperty:::match (1 samples, 0.69%)</title><rect x="539.0" y="449" width="8.1" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="541.97" y="459.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>dequeue_entity (1 samples, 0.69%)</title><rect x="669.2" y="625" width="8.1" height="15.0" fill="rgb(248,120,120)" rx="2" ry="2" />
+<text text-anchor="" x="672.17" y="635.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/fasterxml/jackson/databind/ser/BeanSerializerFactory:::constructBeanSerializer (1 samples, 0.69%)</title><rect x="368.1" y="369" width="8.1" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="371.07" y="379.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>  (8 samples, 5.52%)</title><rect x="18.1" y="817" width="65.1" height="15.0" fill="rgb(248,121,121)" rx="2" ry="2" />
+<text text-anchor="" x="21.14" y="827.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  > </text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (68 samples, 46.90%)</title><rect x="254.1" y="689" width="553.4" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="257.14" y="699.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Interpreter</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Node::out_grow (1 samples, 0.69%)</title><rect x="213.4" y="465" width="8.2" height="15.0" fill="rgb(210,210,62)" rx="2" ry="2" />
+<text text-anchor="" x="216.45" y="475.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Parse::do_one_block (1 samples, 0.69%)</title><rect x="221.6" y="465" width="8.1" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="224.59" y="475.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>JVM_DoPrivileged (1 samples, 0.69%)</title><rect x="335.5" y="497" width="8.2" height="15.0" fill="rgb(232,97,97)" rx="2" ry="2" />
+<text text-anchor="" x="338.52" y="507.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lsun/misc/URLClassPath$JarLoader:::getResource (2 samples, 1.38%)</title><rect x="408.8" y="337" width="16.2" height="15.0" fill="rgb(83,230,83)" rx="2" ry="2" />
+<text text-anchor="" x="411.76" y="347.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>PhaseChaitin::build_ifg_physical (2 samples, 1.38%)</title><rect x="148.3" y="673" width="16.3" height="15.0" fill="rgb(223,223,67)" rx="2" ry="2" />
+<text text-anchor="" x="151.34" y="683.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/jive/myco/commons/metrics/Graphite:::handleEventOrBatchTimeout (2 samples, 1.38%)</title><rect x="327.4" y="561" width="16.3" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="330.38" y="571.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/net/URLClassLoader:::getResourceAsStream (1 samples, 0.69%)</title><rect x="791.2" y="545" width="8.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="794.24" y="555.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/AbstractQueue:::remove (1 samples, 0.69%)</title><rect x="718.0" y="625" width="8.1" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="721.00" y="635.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/concurrent/ScheduledThreadPoolExecutor$DelayedWorkQueue:::finishPoll (1 samples, 0.69%)</title><rect x="644.8" y="593" width="8.1" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="647.76" y="603.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>HaltNode::bottom_type (1 samples, 0.69%)</title><rect x="189.0" y="657" width="8.2" height="15.0" fill="rgb(215,215,64)" rx="2" ry="2" />
+<text text-anchor="" x="192.03" y="667.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>pthread_cond_timedwait@@GLIBC_2.3.2 (1 samples, 0.69%)</title><rect x="132.1" y="833" width="8.1" height="15.0" fill="rgb(91,237,91)" rx="2" ry="2" />
+<text text-anchor="" x="135.07" y="843.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lorg/apache/http/util/VersionInfo:::getUserAgent (5 samples, 3.45%)</title><rect x="408.8" y="513" width="40.6" height="15.0" fill="rgb(91,237,91)" rx="2" ry="2" />
+<text text-anchor="" x="411.76" y="523.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Lor..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>PhaseChaitin::gather_lrg_masks (1 samples, 0.69%)</title><rect x="164.6" y="673" width="8.2" height="15.0" fill="rgb(223,223,67)" rx="2" ry="2" />
+<text text-anchor="" x="167.62" y="683.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>PeriodicTask::real_time_tick (9 samples, 6.21%)</title><rect x="831.9" y="785" width="73.3" height="15.0" fill="rgb(222,222,67)" rx="2" ry="2" />
+<text text-anchor="" x="834.93" y="795.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Periodic..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/nio/charset/CharsetEncoder:::init (1 samples, 0.69%)</title><rect x="433.2" y="33" width="8.1" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="436.17" y="43.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/net/URLClassLoader$2:::run (2 samples, 1.38%)</title><rect x="408.8" y="369" width="16.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="411.76" y="379.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>jmm_GetMemoryUsage (2 samples, 1.38%)</title><rect x="473.9" y="465" width="16.2" height="15.0" fill="rgb(230,94,94)" rx="2" ry="2" />
+<text text-anchor="" x="476.86" y="475.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/codahale/metrics/ScheduledReporter$1:::run (23 samples, 15.86%)</title><rect x="457.6" y="593" width="187.2" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="460.59" y="603.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Lcom/codahale/metrics/Sc..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/io/FilePermission$1:::run (1 samples, 0.69%)</title><rect x="433.2" y="289" width="8.1" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="436.17" y="299.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>futex_wait_queue_me (3 samples, 2.07%)</title><rect x="1059.8" y="721" width="24.4" height="15.0" fill="rgb(236,103,103)" rx="2" ry="2" />
+<text text-anchor="" x="1062.79" y="731.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >f..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Management::create_thread_info_instance (1 samples, 0.69%)</title><rect x="620.3" y="449" width="8.2" height="15.0" fill="rgb(204,204,60)" rx="2" ry="2" />
+<text text-anchor="" x="623.34" y="459.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/concurrent/Executors$RunnableAdapter:::call (8 samples, 5.52%)</title><rect x="734.3" y="641" width="65.1" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="737.28" y="651.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Ljava/u..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lsun/misc/URLClassPath:::findResource (1 samples, 0.69%)</title><rect x="791.2" y="417" width="8.2" height="15.0" fill="rgb(83,230,83)" rx="2" ry="2" />
+<text text-anchor="" x="794.24" y="427.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>JavaCalls::call_special (1 samples, 0.69%)</title><rect x="620.3" y="433" width="8.2" height="15.0" fill="rgb(203,203,60)" rx="2" ry="2" />
+<text text-anchor="" x="623.34" y="443.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/regex/Pattern$Curly:::match (1 samples, 0.69%)</title><rect x="555.2" y="449" width="8.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="558.24" y="459.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/regex/Pattern$Branch:::match (1 samples, 0.69%)</title><rect x="783.1" y="529" width="8.1" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="786.10" y="539.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/net/URLClassLoader$2:::run (1 samples, 0.69%)</title><rect x="791.2" y="433" width="8.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="794.24" y="443.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/jive/v5/isp/core/transport/tcp/handlers/MdcHandler:::setupIncomingMdc (1 samples, 0.69%)</title><rect x="701.7" y="545" width="8.2" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="704.72" y="555.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Java_java_util_zip_ZipFile_getEntry (2 samples, 1.38%)</title><rect x="408.8" y="289" width="16.2" height="15.0" fill="rgb(228,91,91)" rx="2" ry="2" />
+<text text-anchor="" x="411.76" y="299.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>PhaseGVN::transform_no_reclaim (1 samples, 0.69%)</title><rect x="221.6" y="433" width="8.1" height="15.0" fill="rgb(223,223,67)" rx="2" ry="2" />
+<text text-anchor="" x="224.59" y="443.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>__radix_tree_lookup (1 samples, 0.69%)</title><rect x="734.3" y="545" width="8.1" height="15.0" fill="rgb(232,97,97)" rx="2" ry="2" />
+<text text-anchor="" x="737.28" y="555.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Compile::Compile (14 samples, 9.66%)</title><rect x="140.2" y="721" width="113.9" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="143.21" y="731.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Compile::Compile</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Parse::do_one_bytecode (1 samples, 0.69%)</title><rect x="221.6" y="449" width="8.1" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="224.59" y="459.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>pthread_cond_init@@GLIBC_2.3.2 (1 samples, 0.69%)</title><rect x="994.7" y="737" width="8.1" height="15.0" fill="rgb(91,237,91)" rx="2" ry="2" />
+<text text-anchor="" x="997.69" y="747.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Parse::do_all_blocks (5 samples, 3.45%)</title><rect x="205.3" y="673" width="40.7" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="208.31" y="683.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Par..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/sun/jmx/mbeanserver/PerInterface:::getAttribute (1 samples, 0.69%)</title><rect x="490.1" y="465" width="8.2" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="493.14" y="475.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>LinkResolver::resolve_special_call (1 samples, 0.69%)</title><rect x="620.3" y="417" width="8.2" height="15.0" fill="rgb(209,209,62)" rx="2" ry="2" />
+<text text-anchor="" x="623.34" y="427.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lsun/reflect/misc/MethodUtil:::invoke (1 samples, 0.69%)</title><rect x="490.1" y="385" width="8.2" height="15.0" fill="rgb(83,230,83)" rx="2" ry="2" />
+<text text-anchor="" x="493.14" y="395.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lorg/apache/http/impl/client/HttpClientBuilder:::build (2 samples, 1.38%)</title><rect x="783.1" y="593" width="16.3" height="15.0" fill="rgb(91,237,91)" rx="2" ry="2" />
+<text text-anchor="" x="786.10" y="603.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/net/URLClassLoader:::findResource (2 samples, 1.38%)</title><rect x="408.8" y="449" width="16.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="411.76" y="459.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (1 samples, 0.69%)</title><rect x="449.4" y="593" width="8.2" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="452.45" y="603.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>jni_invoke_nonstatic (1 samples, 0.69%)</title><rect x="433.2" y="193" width="8.1" height="15.0" fill="rgb(236,103,103)" rx="2" ry="2" />
+<text text-anchor="" x="436.17" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/security/AccessController:::doPrivileged (2 samples, 1.38%)</title><rect x="408.8" y="433" width="16.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="411.76" y="443.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Parse::Parse (1 samples, 0.69%)</title><rect x="237.9" y="385" width="8.1" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="240.86" y="395.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/codahale/metrics/MetricRegistry:::getMetrics (2 samples, 1.38%)</title><rect x="457.6" y="545" width="16.3" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="460.59" y="555.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lsun/misc/URLClassPath$JarLoader:::getResource (1 samples, 0.69%)</title><rect x="791.2" y="401" width="8.2" height="15.0" fill="rgb(83,230,83)" rx="2" ry="2" />
+<text text-anchor="" x="794.24" y="411.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>  (1 samples, 0.69%)</title><rect x="83.2" y="785" width="8.2" height="15.0" fill="rgb(248,121,121)" rx="2" ry="2" />
+<text text-anchor="" x="86.24" y="795.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/codahale/metrics/graphite/GraphiteReporter:::reportMetered (1 samples, 0.69%)</title><rect x="539.0" y="529" width="8.1" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="541.97" y="539.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/jive/myco/commons/concurrent/Pnky$$Lambda$166/828137498:::run (1 samples, 0.69%)</title><rect x="311.1" y="641" width="8.1" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="314.10" y="651.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>  (1 samples, 0.69%)</title><rect x="83.2" y="801" width="8.2" height="15.0" fill="rgb(248,121,121)" rx="2" ry="2" />
+<text text-anchor="" x="86.24" y="811.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/sun/jmx/mbeanserver/MBeanIntrospector:::invokeM (1 samples, 0.69%)</title><rect x="490.1" y="449" width="8.2" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="493.14" y="459.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>JavaCalls::call_virtual (68 samples, 46.90%)</title><rect x="254.1" y="737" width="553.4" height="15.0" fill="rgb(203,203,60)" rx="2" ry="2" />
+<text text-anchor="" x="257.14" y="747.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >JavaCalls::call_virtual</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>ParseGenerator::generate (5 samples, 3.45%)</title><rect x="205.3" y="705" width="40.7" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="208.31" y="715.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Par..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/codahale/metrics/graphite/GraphiteReporter:::reportGauge (8 samples, 5.52%)</title><rect x="473.9" y="545" width="65.1" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="476.86" y="555.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Lcom/co..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lsun/net/www/protocol/jar/JarURLConnection:::getInputStream (2 samples, 1.38%)</title><rect x="433.2" y="465" width="16.2" height="15.0" fill="rgb(83,230,83)" rx="2" ry="2" />
+<text text-anchor="" x="436.17" y="475.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (5 samples, 3.45%)</title><rect x="351.8" y="465" width="40.7" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="354.79" y="475.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Int..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lsun/management/ThreadImpl:::getThreadInfo1 (2 samples, 1.38%)</title><rect x="620.3" y="481" width="16.3" height="15.0" fill="rgb(83,230,83)" rx="2" ry="2" />
+<text text-anchor="" x="623.34" y="491.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/fasterxml/jackson/databind/ser/BeanSerializer:::serialize (1 samples, 0.69%)</title><rect x="766.8" y="497" width="8.2" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="769.83" y="507.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/codahale/metrics/graphite/GraphiteReporter:::reportTimer (3 samples, 2.07%)</title><rect x="539.0" y="545" width="24.4" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="541.97" y="555.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >L..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>pthread_cond_timedwait@@GLIBC_2.3.2 (1 samples, 0.69%)</title><rect x="83.2" y="769" width="8.2" height="15.0" fill="rgb(91,237,91)" rx="2" ry="2" />
+<text text-anchor="" x="86.24" y="779.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Matcher::match (1 samples, 0.69%)</title><rect x="140.2" y="689" width="8.1" height="15.0" fill="rgb(199,199,58)" rx="2" ry="2" />
+<text text-anchor="" x="143.21" y="699.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>ZIP_GetEntry2 (2 samples, 1.38%)</title><rect x="408.8" y="273" width="16.2" height="15.0" fill="rgb(240,108,108)" rx="2" ry="2" />
+<text text-anchor="" x="411.76" y="283.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>InstanceKlass::uncached_lookup_method (1 samples, 0.69%)</title><rect x="612.2" y="369" width="8.1" height="15.0" fill="rgb(218,218,65)" rx="2" ry="2" />
+<text text-anchor="" x="615.21" y="379.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/concurrent/ScheduledThreadPoolExecutor$DelayedWorkQueue:::take (2 samples, 1.38%)</title><rect x="644.8" y="625" width="16.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="647.76" y="635.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>frame::sender_for_compiled_frame (1 samples, 0.69%)</title><rect x="823.8" y="673" width="8.1" height="15.0" fill="rgb(220,220,66)" rx="2" ry="2" />
+<text text-anchor="" x="826.79" y="683.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>plist_add (1 samples, 0.69%)</title><rect x="123.9" y="801" width="8.2" height="15.0" fill="rgb(233,98,98)" rx="2" ry="2" />
+<text text-anchor="" x="126.93" y="811.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Interpreter (1 samples, 0.69%)</title><rect x="433.2" y="97" width="8.1" height="15.0" fill="rgb(243,112,112)" rx="2" ry="2" />
+<text text-anchor="" x="436.17" y="107.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>__libc_send (1 samples, 0.69%)</title><rect x="91.4" y="817" width="8.1" height="15.0" fill="rgb(236,103,103)" rx="2" ry="2" />
+<text text-anchor="" x="94.38" y="827.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lio/netty/channel/DefaultChannelHandlerContext:::fireChannelRead (1 samples, 0.69%)</title><rect x="701.7" y="609" width="8.2" height="15.0" fill="rgb(87,233,87)" rx="2" ry="2" />
+<text text-anchor="" x="704.72" y="619.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>PhaseIFG::SquareUp (1 samples, 0.69%)</title><rect x="172.8" y="673" width="8.1" height="15.0" fill="rgb(223,223,67)" rx="2" ry="2" />
+<text text-anchor="" x="175.76" y="683.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/net/AbstractPlainSocketImpl:::getOutputStream (1 samples, 0.69%)</title><rect x="335.5" y="449" width="8.2" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="338.52" y="459.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/Formatter$FormatSpecifier:::init (1 samples, 0.69%)</title><rect x="547.1" y="513" width="8.1" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="550.10" y="523.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>LinkResolver::resolve_special_call (1 samples, 0.69%)</title><rect x="612.2" y="433" width="8.1" height="15.0" fill="rgb(209,209,62)" rx="2" ry="2" />
+<text text-anchor="" x="615.21" y="443.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lsun/misc/URLClassPath:::findResource (2 samples, 1.38%)</title><rect x="408.8" y="353" width="16.2" height="15.0" fill="rgb(83,230,83)" rx="2" ry="2" />
+<text text-anchor="" x="411.76" y="363.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>LinkResolver::resolve_method (1 samples, 0.69%)</title><rect x="612.2" y="401" width="8.1" height="15.0" fill="rgb(209,209,62)" rx="2" ry="2" />
+<text text-anchor="" x="615.21" y="411.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>jni_CallObjectMethod (1 samples, 0.69%)</title><rect x="433.2" y="209" width="8.1" height="15.0" fill="rgb(236,103,103)" rx="2" ry="2" />
+<text text-anchor="" x="436.17" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/fasterxml/jackson/databind/introspect/AnnotatedConstructor:::getGenericParameterType (1 samples, 0.69%)</title><rect x="351.8" y="305" width="8.1" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="354.79" y="315.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Java_java_util_zip_ZipFile_getEntry (1 samples, 0.69%)</title><rect x="791.2" y="353" width="8.2" height="15.0" fill="rgb(228,91,91)" rx="2" ry="2" />
+<text text-anchor="" x="794.24" y="363.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>cpuacct_charge (1 samples, 0.69%)</title><rect x="1043.5" y="721" width="8.2" height="15.0" fill="rgb(228,91,91)" rx="2" ry="2" />
+<text text-anchor="" x="1046.52" y="731.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Monitor::wait (28 samples, 19.31%)</title><rect x="905.2" y="769" width="227.8" height="15.0" fill="rgb(213,213,64)" rx="2" ry="2" />
+<text text-anchor="" x="908.17" y="779.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Monitor::wait</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>CompileBroker::compiler_thread_loop (14 samples, 9.66%)</title><rect x="140.2" y="769" width="113.9" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="143.21" y="779.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >CompileBroker:..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/fasterxml/jackson/databind/SerializerProvider:::findValueSerializer (2 samples, 1.38%)</title><rect x="392.5" y="465" width="16.3" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="395.48" y="475.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Compile::too_many_traps (1 samples, 0.69%)</title><rect x="205.3" y="545" width="8.1" height="15.0" fill="rgb(214,214,64)" rx="2" ry="2" />
+<text text-anchor="" x="208.31" y="555.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>I2C/C2I adapters (1 samples, 0.69%)</title><rect x="278.6" y="641" width="8.1" height="15.0" fill="rgb(89,236,89)" rx="2" ry="2" />
+<text text-anchor="" x="281.55" y="651.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/jive/myco/commons/concurrent/Pnky:::lambda$supplyAsync$9 (1 samples, 0.69%)</title><rect x="726.1" y="625" width="8.2" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="729.14" y="635.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>MemoryService::create_MemoryUsage_obj (1 samples, 0.69%)</title><rect x="482.0" y="449" width="8.1" height="15.0" fill="rgb(213,213,63)" rx="2" ry="2" />
+<text text-anchor="" x="485.00" y="459.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Ljava/util/regex/Pattern$Curly:::match (1 samples, 0.69%)</title><rect x="539.0" y="465" width="8.1" height="15.0" fill="rgb(87,234,87)" rx="2" ry="2" />
+<text text-anchor="" x="541.97" y="475.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lcom/sun/jmx/mbeanserver/JmxMBeanServer:::getAttribute (1 samples, 0.69%)</title><rect x="490.1" y="513" width="8.2" height="15.0" fill="rgb(94,241,94)" rx="2" ry="2" />
+<text text-anchor="" x="493.14" y="523.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>pthread_getspecific (1 samples, 0.69%)</title><rect x="652.9" y="545" width="8.1" height="15.0" fill="rgb(237,104,104)" rx="2" ry="2" />
+<text text-anchor="" x="655.90" y="555.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>Lsun/reflect/generics/visitor/Reifier:::visitClassTypeSignature (1 samples, 0.69%)</title><rect x="351.8" y="257" width="8.1" height="15.0" fill="rgb(83,230,83)" rx="2" ry="2" />
+<text text-anchor="" x="354.79" y="267.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+</svg>
