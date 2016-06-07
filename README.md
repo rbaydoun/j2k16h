@@ -1,5 +1,7 @@
 # javaflame
-The purpose of this project was to write a script that will generate Flame Graphs for all running java processes on the machine with minimal effort and without having to restart the Java processes and services.  By starting the java processes with the `-XX:+PreserveFramePointer` flag, we actually 
+The purpose of this project was to write a script that will generate Flame Graphs for all running java processes on the machine with minimal effort and without having to restart the Java processes and services.  By starting the java processes with the `-XX:+PreserveFramePointer` flag, it is now possible to create "mixed mode" flame graphs.
+
+(See https://www.infoq.com/news/2015/08/JVM-Option-mixed-mode-profiles for details.)
 
 Heavily inspired by jmaps, by Brendan Gregg (13-Feb-2015)
 
