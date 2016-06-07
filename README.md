@@ -12,8 +12,8 @@ https://github.com/brendangregg/Misc/blob/master/java/jmaps
 * The stackcollapse-perf.pl and flamegraph.pl programs come from:
    https://github.com/brendangregg/FlameGraph
 * Java processes are required to have been started with the `-XX:+PreserveFramePointer` parameter.
-* If you're missing `less`: `sudo apt-get install less`
-* If you're missing `linux-tools`: `sudo apt-get install linux-tools`
+* If you're missing `less` : `sudo apt-get install less`
+* If you're missing `linux-tools` : `sudo apt-get install linux-tools`
 
 ### Usage - Optional Parameters
 Simply run with `sudo`
