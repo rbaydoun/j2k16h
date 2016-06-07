@@ -13,7 +13,7 @@
 # http://www.slideshare.net/brendangregg/blazing-performance-with-flame-graphs/35
 
 JAVA_HOME=/usr/lib/jvm/j2sdk1.8-oracle
-FLAME_GRAPH_HOME=/home/admin/git/FlameGraph-master
+FLAME_GRAPH_HOME=./FlameGraph-master
 AGENT_HOME=$JAVA_HOME
 PERF_CMD=/usr/bin/perf_3.2
 
@@ -130,7 +130,8 @@ for PID in $(pgrep -x jsvc); do
 	host=$(hostname)
 	date_time=$(date)
 	title="$host - PID $PID @ $date_time"
-	cmd="cat output.tmp | grep $PID | $FLAME_GRAPH_HOME/flamegraph.pl --color=java --title=\"$title\" --hash > flamegraph_$PID.svg"
+	mkdir ./flame_output
+	cmd="cat output.tmp | grep $PID | $FLAME_GRAPH_HOME/flamegraph.pl --color=java --title=\"$title\" --hash > ./flame_output/flamegraph_$PID.svg"
 	eval $cmd
 done
 
