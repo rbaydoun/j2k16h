@@ -22,3 +22,7 @@ https://github.com/brendangregg/Misc/blob/master/java/jmaps
 
 ### Learn more
    http://techblog.netflix.com/2015/07/java-in-flames.html
+   
+   Brendan Gregg LISA 2013 presentation:
+   https://www.youtube.com/watch?v=nZfNehCzGdw
+   
