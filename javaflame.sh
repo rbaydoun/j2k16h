@@ -2,9 +2,9 @@
 # https://github.com/brendangregg/Misc/blob/master/java/jmaps
 
 # Requirements:
-#   Linux perf tools --> already setup in Jim Instances.
+#   Linux perf tools.
 # 	The stackcollapse-perf.pl and flamegraph.pl programs come from:
-# 	https://github.com/brendangregg/FlameGraph
+# 	  https://github.com/brendangregg/FlameGraph
 #
 # Usage -- Param 1: Sampling frequency (defaults to 99Hz)
 #          Param 2: Sample time        )defaults to 30s)
@@ -54,15 +54,6 @@ fi
 if [ ! -x $PERF_CMD ]; then
 	echo "ERROR: PERF_CMD not set correctly; edit $0 and fix"
 	exit
-fi
-
-# Validate parameters and set default values if missing.
-if [ -z "$FREQUENCY" ]; then
-	FREQUENCY=99
-fi
-
-if [ -z "$SLEEP_TIME" ]; then
-	SLEEP_TIME=30
 fi
 
 # figure out where the agent files are:
