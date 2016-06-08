@@ -73,7 +73,10 @@ fi
 
 
 # Create output directory
-mkdir ./flame_output
+output_dir=./flame_output
+if [ ! -e $output_dir ]; then
+	mkdir $output_dir
+fi
 
 echo "Sampling perf_events at $FREQUENCY Hz for $SLEEP_TIME seconds..."
 cmd="$PERF_CMD record -F $FREQUENCY -a -g -- sleep $SLEEP_TIME"
@@ -124,7 +127,7 @@ for PID in $(pgrep -x jsvc); do
 	host=$(hostname)
 	date_time=$(date)
 	title="$host - PID $PID @ $date_time"
-	cmd="cat output.tmp | grep $PID | $FLAME_GRAPH_HOME/flamegraph.pl --color=java --title=\"$title\" --hash > \"./flame_output/$title.svg\""
+	cmd="cat output.tmp | grep $PID | $FLAME_GRAPH_HOME/flamegraph.pl --color=java --title=\"$title\" --hash > \"$output_dir/$title.svg\""
 	eval $cmd
 done
 
